@@ -32,6 +32,32 @@ export interface Meta {
   available: boolean;
 }
 
+export interface RouterDevice {
+  ip: string;
+  mac: string;
+  hostname?: string;
+  rx_bytes?: number;
+  tx_bytes?: number;
+  rssi?: number | null;
+  online?: boolean;
+  wired?: boolean | null;
+}
+
+export interface RouterPayload {
+  available: boolean;
+  note?: string;
+  host?: string;
+  model?: string;
+  friendly?: string;
+  serial?: string;
+  manufacturer_oui?: string;
+  router_ok?: boolean;
+  terminal_source?: string;
+  fetched_at?: number;
+  router_devices?: RouterDevice[];
+  router_count?: number;
+}
+
 export async function apiGet<T>(url: string): Promise<T> {
   const r = await window.fetch(url);
   if (!r.ok) throw new Error(url + " -> HTTP " + r.status);
@@ -44,6 +70,22 @@ export function apiDevices(): Promise<DevicesPayload> {
 
 export function apiMeta(): Promise<Meta> {
   return apiGet<Meta>("/api/meta");
+}
+
+export function apiRouter(): Promise<RouterPayload> {
+  return apiGet<RouterPayload>("/api/router");
+}
+
+export function fmtBytes(n?: number): string {
+  if (n === undefined || n === null || n <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return v.toFixed(v >= 10 || i === 0 ? 0 : 1) + " " + units[i];
 }
 
 export function fmtTs(unix: number): string {

@@ -134,6 +134,21 @@ table.devs td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace
 .loading { padding: 32px; text-align: center; color: var(--muted); }
 .fetchline { margin-top: 10px; font-size: 0.78rem; color: var(--muted); text-align: right; }
 
+/* 路由器信息区 */
+.routerbox { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
+.routerhead { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.routermodel { font-size: 1.05rem; font-weight: 700; }
+.routermeta { font-size: 0.82rem; color: var(--muted); }
+.routerbox .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.rtrdevs { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; }
+.rtrdevs-title { font-size: 0.85rem; font-weight: 600; margin-bottom: 8px; color: var(--fg); }
+.rtrdev { display: flex; align-items: center; gap: 12px; padding: 4px 0; font-size: 0.9rem; }
+.rtrdev-ip { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; min-width: 130px; }
+.rtrdev-host { flex: 1; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rtrdev-net { font-size: 0.82rem; color: var(--muted); white-space: nowrap; }
+.routernote { margin-top: 10px; font-size: 0.85rem; color: var(--muted); background: rgba(217, 119, 6, 0.08); border-radius: 8px; padding: 10px 12px; line-height: 1.6; }
+.routernote.dim { background: none; padding: 0; }
+
 /* 页脚 */
 footer.foot { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 0.82rem; color: var(--muted); display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 

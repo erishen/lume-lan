@@ -11,3 +11,4 @@ node_modules/
 # esbuild 产物 www/app.js 可提交（Lume 直接 serve，免宿主每次构建）
 # 注：www/index.html 与 www/app.css 是手写源文件，正常提交；仅 app.js 是构建产物
 !www/app.js
+.env

@@ -5,6 +5,9 @@
 // 「暂无快照」提示,而非 500。
 
 let snap_path = ".data/devices.json";
+// 路由器后台抓取的快照(宿主 scripts/router_fetch.py → .data/router.json)。
+// 缺文件/损坏 → null,前端据此隐藏「路由器」区(优雅降级,不影响 arp 快照)。
+let router_path = ".data/router.json";
 // 快照「过期」阈值(秒):超过就提示前端重新 make scan。可经 env 覆盖。
 let stale_secs = env("LAN_STALE_SECS");
 if (stale_secs == null) { stale_secs = "300"; }
@@ -49,7 +52,7 @@ export func devices_payload() {
   let stale = age > int(stale_secs);
   let note = "";
   if (stale) {
-    note = "快照已 " + int(age / 60) + " 分钟未刷新,宿主 make scan 可更新";
+    note = "快照已 " + str(int(age / 60.0)) + " 分钟未刷新,宿主 make scan 可更新";
   }
   return {
     ok: true,
@@ -78,5 +81,35 @@ export func meta_payload() {
     sweep: get(s, "sweep", false),
     scanned_at: int(get(s, "scanned_at", 0)),
     available: true,
+  };
+}
+
+// 路由器后台信息:读 .data/router.json(宿主 router_fetch.py 产出)。
+// router.ok = deviceinfo 免密是否成功;router_devices = 登录态抓到的终端/流量
+// (可能为空,前端据 terminal_source 与 router_devices 长度决定显示)。
+export func router_payload() {
+  let txt = read_file(router_path);
+  if (txt == null) {
+    return { available: false, note: "暂无路由器数据——宿主跑 make router-fetch 生成 .data/router.json" };
+  }
+  let r = try(() => json(txt));
+  if (r.err != null) {
+    return { available: false, note: "router.json 损坏——重跑 make router-fetch" };
+  }
+  let ro = r.ok;
+  let router = get(ro, "router", {});
+  let rdevs = get(ro, "router_devices", []);
+  return {
+    available: true,
+    host: get(router, "host", ""),
+    model: get(router, "model", ""),
+    friendly: get(router, "friendly", ""),
+    serial: get(router, "serial", ""),
+    manufacturer_oui: get(router, "manufacturer_oui", ""),
+    router_ok: get(router, "ok", false),
+    terminal_source: get(ro, "terminal_source", ""),
+    fetched_at: int(get(router, "fetched_at", 0)),
+    router_devices: rdevs,
+    router_count: len(rdevs),
   };
 }

@@ -34,5 +34,12 @@ get "/api/meta", (req) => {
   return lantbl.meta_payload();
 };
 
+// 路由器后台信息:读 .data/router.json(宿主 make router-fetch 产出)。
+// router.ok=true 时 model/serial/厂商可用;router_devices 为登录态抓到的终端/流量
+// (HiLink 私有端点,未命中则为空,前端据 terminal_source 与长度决定是否显示)。
+get "/api/router", (req) => {
+  return lantbl.router_payload();
+};
+
 // 注册窗口关闭,开始伺服(与 crm.lume 同款——server{} 定义好路由后必须显式 run())。
 run();

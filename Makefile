@@ -11,6 +11,8 @@
 # 分步:
 #   make scan        跑宿主扫描脚本(arp 现成表,秒级)→ 写 .data/devices.json
 #   make scan-sweep  同上加 ping sweep(捞在线但 arp 表没有的设备,较慢)
+#   make router-fetch 抓路由器后台(华为 WS5102/HiLink)→ 写 .data/router.json
+#                  (免密的 deviceinfo 直接可用;终端/流量需 .env 填 ROUTER_PASS,命中候选端点)
 #   make ui          一次性构建前端(esbuild 单次 → www/app.js,非 watch;dev 用的是 watch)
 #   make check       只跑 Lume 类型检查(lan.lume + src/devices.lume)
 #
@@ -47,6 +49,11 @@ scan:
 scan-sweep:
 	@LAN_SWEEP=1 $(PY) scripts/scan_lan.py
 
+# 路由器后台抓取(华为 WS5102/HiLink):免密 deviceinfo 直接写 .data/router.json;
+# 终端/流量需 .env 填 ROUTER_PASS(与 ROUTER_TERMINAL_API,命中候选端点)。取不到不影响 arp 快照。
+router-fetch:
+	@$(PY) scripts/router_fetch.py
+
 check:
 	@$(LUME) --check lan.lume
 
@@ -62,7 +69,7 @@ watch:
 # 改 .tsx 前端秒级热刷;改 .lume 需 Ctrl-C 重跑 make dev(Lume 无 watch)。
 # 注意:watch + server 必须同一条命令链(trap 只在当前 shell 内有效,make 每行 recipe
 # 各起一个 shell,拆成多行则 trap 失效)。
-dev: stop check scan
+dev: stop check scan router-fetch
 	@echo "▶ http://127.0.0.1:$(PORT)  (make dev:热更已开,.tsx 改动自动重打包;数据源刷新:make scan)"
 	@trap 'pkill -f "esbuild src/lan/app.tsx" 2>/dev/null; kill 0' INT; \
 	{ $(ESBUILD) src/lan/app.tsx --bundle --format=esm --jsx=automatic --outdir=www --outbase=src/lan --watch & } \
@@ -74,4 +81,4 @@ lan: dev
 # lan-dev 原为「watch 版 dev」,现已并入 make dev(热更是默认行为),此处仅作别名。
 lan-dev: dev
 
-.PHONY: default dev lan lan-dev stop scan scan-sweep check ui watch
+.PHONY: default dev lan lan-dev stop scan scan-sweep check ui watch router-fetch

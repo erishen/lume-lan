@@ -11,9 +11,12 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import {
   DevicesPayload,
+  RouterPayload,
   apiDevices,
+  apiRouter,
   fmtTs,
   fmtAge,
+  fmtBytes,
 } from "../api";
 
 function parsePath(): { view: string } {
@@ -51,6 +54,7 @@ function DeviceRow({ ip, mac, iface, source, live, gateway }: {
 
 function Dashboard(): React.ReactElement {
   const [data, setData] = React.useState<DevicesPayload | null>(null);
+  const [router, setRouter] = React.useState<RouterPayload | null>(null);
   const [err, setErr] = React.useState<string>("");
   const [kw, setKw] = React.useState("");
   const [onlyLive, setOnlyLive] = React.useState(false);
@@ -59,8 +63,9 @@ function Dashboard(): React.ReactElement {
   const load = React.useCallback(async () => {
     setErr("");
     try {
-      const d = await apiDevices();
+      const [d, ro] = await Promise.all([apiDevices(), apiRouter().catch(() => null)]);
       setData(d);
+      setRouter(ro);
       setLastFetch(Date.now());
     } catch (e) {
       setErr((e as Error).message);
@@ -95,6 +100,37 @@ function Dashboard(): React.ReactElement {
             <div className="kpi"><div className="k">网关</div><div className="v small">{data.gateway || "—"}</div><div className="u">{data.subnet}</div></div>
             <div className="kpi"><div className="k">快照</div><div className="v small">{fmtAge(data.scanned_at)}</div><div className="u">{data.sweep ? "含 ping sweep" : "仅 arp 表"}</div></div>
           </div>
+
+          {router && router.available ? (
+            <div className="routerbox">
+              <div className="routerhead">
+                <span className="routermodel">{router.friendly || router.model || "路由器"}</span>
+                {router.model ? <span className="routermeta">{router.model}</span> : null}
+                {router.serial ? <span className="routermeta mono">SN {router.serial}</span> : null}
+                {router.manufacturer_oui ? <span className="routermeta">OUI {router.manufacturer_oui}</span> : null}
+              </div>
+              {(router.router_devices && router.router_devices.length > 0) ? (
+                <div className="rtrdevs">
+                  <div className="rtrdevs-title">路由器终端 / 流量（{router.router_count}，来源 {router.terminal_source}）</div>
+                  {router.router_devices.map((d) => (
+                    <div key={d.ip + d.mac} className="rtrdev">
+                      <span className="rtrdev-ip mono">{d.ip}</span>
+                      {d.hostname ? <span className="rtrdev-host">{d.hostname}</span> : null}
+                      <span className="rtrdev-net">↑{fmtBytes(d.tx_bytes)} ↓{fmtBytes(d.rx_bytes)}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="routernote">
+                  登录态的终端列表 / 每设备流量未取到（HiLink 私有端点 + 加密请求体，curl 无法直接调）。
+                  宿主：在 <code>.env</code> 填 <code>ROUTER_PASS</code>，并从浏览器后台 Network 面板把「终端管理 / 流量」的真实端点填进 <code>ROUTER_TERMINAL_API</code>，再 <code>make router-fetch</code>。
+                </div>
+              )}
+            </div>
+          ) : router && router.note ? (
+            <div className="routernote dim">{router.note}</div>
+          ) : null}
+
           {(data.stale || data.note) ? <div className={"banner " + (data.stale ? "warn" : "")}>{data.note}</div> : null}
           <div className="toolbar">
             <input

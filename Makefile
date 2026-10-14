@@ -1,18 +1,18 @@
 # lume-lan Makefile — 局域网设备看板(Lume 服务端 + React + 宿主扫描脚本)
 #
 # 常用:
-#   make dev       日常入口:先停掉 PORT 上的旧服务/残留 watch,再 check+ui+scan+起服务
-#                  (前台阻塞,Ctrl-C 退出;重复执行会先清掉上次的实例,不会撞端口)
+#   make dev       日常入口(热更):先 stop 清掉 PORT 旧服务/残留 watch,再 check+scan,
+#                  然后 esbuild --watch(改 .tsx 即自动重打包,毫秒级)+ 前台起 Lume。
+#                  前台阻塞,Ctrl-C 退出时自动清掉 esbuild watch;重复执行先清旧实例,不撞端口。
 #   make stop      只停:kill PORT 上旧服务 + 残留 esbuild watch(不重启)
 #   make lan       make dev 的别名(向后兼容)
-#   make lan-dev   check + 前端 --watch + 起服务(改 .tsx 即刷,改 .lume 重启生效)
+#   make lan-dev   make dev 的别名(原「watch 版」已并入 dev)
 #
 # 分步:
 #   make scan        跑宿主扫描脚本(arp 现成表,秒级)→ 写 .data/devices.json
 #   make scan-sweep  同上加 ping sweep(捞在线但 arp 表没有的设备,较慢)
-#   make ui          只构建前端(esbuild → www/app.js)
+#   make ui          一次性构建前端(esbuild 单次 → www/app.js,非 watch;dev 用的是 watch)
 #   make check       只跑 Lume 类型检查(lan.lume + src/devices.lume)
-#   make watch       前端 esbuild --watch(另开终端跑 make dev / lan-dev)
 #
 # 依赖:
 #   LUME    = ~/.local/bin/lume(release;安装 curl …/install.sh | sh,或用 ../lume-core/bin/lume-core)
@@ -57,20 +57,21 @@ ui:
 watch:
 	@$(ESBUILD) src/lan/app.tsx --bundle --format=esm --jsx=automatic --outdir=www --outbase=src/lan --watch
 
-# 日常入口:先 stop(kill 旧端口服务),再 check + 构建 + 首跑快照 + 前台起服务。
-# 重复执行安全——每次都先清掉上一次占着 PORT 的实例,不会撞端口。Ctrl-C 退出。
-dev: stop check ui scan
-	@echo "▶ http://127.0.0.1:$(PORT)  (make dev:已停旧服务再起;数据源刷新:make scan)"
-	@$(LUME) lan.lume
-
-# 向后兼容:make lan ≡ make dev
-lan: dev
-
-# dev 的 watch 版:先 stop,再 check,然后前端 --watch 与 Lume 起服务并发跑。
-# 改 .tsx 即热刷;改 .lume 需 Ctrl-C 后重跑(或再 make lan-dev)。退出时清掉 watch。
-lan-dev: stop check
+# 日常入口(热更):stop(清旧实例)→ check → scan → esbuild --watch(后台,改 .tsx 即重打包)+ 前台起 Lume。
+# 重复执行安全——每次先清掉占 PORT 的上次实例;Ctrl-C 退出时 trap 清掉 esbuild watch。
+# 改 .tsx 前端秒级热刷;改 .lume 需 Ctrl-C 重跑 make dev(Lume 无 watch)。
+# 注意:watch + server 必须同一条命令链(trap 只在当前 shell 内有效,make 每行 recipe
+# 各起一个 shell,拆成多行则 trap 失效)。
+dev: stop check scan
+	@echo "▶ http://127.0.0.1:$(PORT)  (make dev:热更已开,.tsx 改动自动重打包;数据源刷新:make scan)"
 	@trap 'pkill -f "esbuild src/lan/app.tsx" 2>/dev/null; kill 0' INT; \
 	{ $(ESBUILD) src/lan/app.tsx --bundle --format=esm --jsx=automatic --outdir=www --outbase=src/lan --watch & } \
 	{ $(LUME) lan.lume; }
 
-.PHONY: default dev lan stop scan scan-sweep check ui watch lan-dev
+# 向后兼容:make lan ≡ make dev
+lan: dev
+
+# lan-dev 原为「watch 版 dev」,现已并入 make dev(热更是默认行为),此处仅作别名。
+lan-dev: dev
+
+.PHONY: default dev lan lan-dev stop scan scan-sweep check ui watch

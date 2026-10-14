@@ -1,14 +1,20 @@
-# 隐私数据（内网 IP/MAC 快照）不提交
+# ---- 隐私 / 本机数据（勿提交）----
+# 内网 IP/MAC 快照 + 路由器抓取快照
 .data/
-# 运行时临时物（服务端日志等）
+# 路由器凭据（.env 含 ROUTER_PASS；.env.bak 是 sed -i.bak 产物）
+.env
+.env.bak
+# 运行时临时物（服务端日志 / 探针 / 临时端口文件）
 .runtime/
 logs/
-# node_modules 是软链(→ ../lume/frontend/node_modules),须带/与不带/都写才匹配软链
-node_modules
-node_modules/
 *.log
 
-# esbuild 产物 www/app.js 可提交（Lume 直接 serve，免宿主每次构建）
-# 注：www/index.html 与 www/app.css 是手写源文件，正常提交；仅 app.js 是构建产物
-!www/app.js
-.env
+# ---- 依赖 ----
+# node_modules 是软链（→ ../lume/frontend/node_modules）
+node_modules
+node_modules/
+
+# ---- 有意跟踪 ----
+# .env.example（无密码模板）与 www/app.js（esbuild 产物,Lume 直接 serve,免宿主 build）
+# 二者都要进仓,若被上面某条误伤请用 ! 显式放行:
+!.env.example

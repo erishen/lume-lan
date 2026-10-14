@@ -64,16 +64,16 @@ ui:
 watch:
 	@$(ESBUILD) src/lan/app.tsx --bundle --format=esm --jsx=automatic --outdir=www --outbase=src/lan --watch
 
-# 日常入口(热更):stop(清旧实例)→ check → scan → esbuild --watch(后台,改 .tsx 即重打包)+ 前台起 Lume。
-# 重复执行安全——每次先清掉占 PORT 的上次实例;Ctrl-C 退出时 trap 清掉 esbuild watch。
-# 改 .tsx 前端秒级热刷;改 .lume 需 Ctrl-C 重跑 make dev(Lume 无 watch)。
-# 注意:watch + server 必须同一条命令链(trap 只在当前 shell 内有效,make 每行 recipe
-# 各起一个 shell,拆成多行则 trap 失效)。
+# 日常入口(热更):stop(清旧实例)→ check → scan → router-fetch → esbuild --watch(后台)+ 前台起 Lume。
+# 重复执行安全——每次先清掉占 PORT 的上次实例;改 .tsx 秒级热刷;改 .lume 需 Ctrl-C 重跑。
+# 注意(macOS make 默认 /bin/sh = POSIX sh):不能用 "{ cmd & }" 花括号组(& 后紧跟 } 非法)。
+# 故 esbuild watch 单独一行后台(&),Lume 单独一行前台阻塞;Ctrl-C 停 Lume 后,残留的
+# esbuild watch 由「make stop」或「下次 make dev」的 stop 阶段清掉(stop 里已 pkill esbuild)。
 dev: stop check scan router-fetch
 	@echo "▶ http://127.0.0.1:$(PORT)  (make dev:热更已开,.tsx 改动自动重打包;数据源刷新:make scan)"
-	@trap 'pkill -f "esbuild src/lan/app.tsx" 2>/dev/null; kill 0' INT; \
-	{ $(ESBUILD) src/lan/app.tsx --bundle --format=esm --jsx=automatic --outdir=www --outbase=src/lan --watch & } \
-	{ $(LUME) lan.lume; }
+	@$(ESBUILD) src/lan/app.tsx --bundle --format=esm --jsx=automatic --outdir=www --outbase=src/lan --watch &
+	@echo "▶ esbuild watch 已后台;Lume 起服务中(Ctrl-C 停 Lume,残留 watch 由 make stop 清理)"
+	@$(LUME) lan.lume
 
 # 向后兼容:make lan ≡ make dev
 lan: dev

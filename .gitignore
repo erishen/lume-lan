@@ -1,0 +1,13 @@
+# 隐私数据（内网 IP/MAC 快照）不提交
+.data/
+# 运行时临时物（服务端日志等）
+.runtime/
+logs/
+# node_modules 是软链(→ ../lume/frontend/node_modules),须带/与不带/都写才匹配软链
+node_modules
+node_modules/
+*.log
+
+# esbuild 产物 www/app.js 可提交（Lume 直接 serve，免宿主每次构建）
+# 注：www/index.html 与 www/app.css 是手写源文件，正常提交；仅 app.js 是构建产物
+!www/app.js

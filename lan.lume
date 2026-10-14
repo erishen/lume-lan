@@ -1,0 +1,38 @@
+// lan.lume — 局域网设备看板入口:server{} + HTTP 路由
+//
+// 启动: lume lan.lume  → http://127.0.0.1:8091   (lume = release, 默认 ~/.local/bin/lume)
+//   /               仪表盘(React SPA,设备列表 + 摘要)
+//   GET /api/devices  当前快照设备列表(读 .data/devices.json,宿主 make scan 刷新)
+//
+// 架构:lume-core 无 exec/子进程内置,「取设备」的真实系统调用(arp/ping)放宿主
+// 脚本 scripts/scan_lan.py(产出 .data/devices.json 快照),本 .lume 侧只做
+// HTTP 服务 + 读快照 + 交给 React 展示。刷新靠 `make scan`(宿主),浏览器再拉
+// /api/devices 即见最新。
+
+// bind 可经 env 覆盖(容器传 LUME_BIND=0.0.0.0);本地默认仍绑 127.0.0.1。
+let lan_bind = env("LUME_BIND");
+if (lan_bind == null) { lan_bind = "127.0.0.1"; }
+server {
+  port = 8091;
+  workers = 2;
+  bind = lan_bind;
+  docroot = "./www";
+  spa = true;        // SPA history 路由:GET + Accept:text/html + 静态 404 → 回 index.html
+  htpasswd = env("HTPASSWD_FILE");  // 本地留空=无认证;公网注入即开 Basic Auth
+};
+
+// 领域层:读快照 + 组装响应(import 时不建库,纯无状态;快照文件由宿主 make scan 产出)
+import "src/devices.lume" as lantbl;
+
+// 设备列表:读 .data/devices.json(缺失 → 空表 + 提示,不 500)。
+get "/api/devices", (req) => {
+  return lantbl.devices_payload();
+};
+
+// 元信息:网关 / 网段 / 快照时间 / 是否过期(前端据此显示「已过期,请 make scan」)。
+get "/api/meta", (req) => {
+  return lantbl.meta_payload();
+};
+
+// 注册窗口关闭,开始伺服(与 crm.lume 同款——server{} 定义好路由后必须显式 run())。
+run();

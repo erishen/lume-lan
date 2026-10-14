@@ -1,0 +1,82 @@
+// lan/src/devices.lume — 领域层:读 .data/devices.json 快照 + 组装响应
+//
+// 纯无状态:快照由宿主 scripts/scan_lan.py(make scan)原子写,本层只读。
+// lume-core 的 read_file() 文件缺失静默返回 null(不报错),据此优雅降级为
+// 「暂无快照」提示,而非 500。
+
+let snap_path = ".data/devices.json";
+// 快照「过期」阈值(秒):超过就提示前端重新 make scan。可经 env 覆盖。
+let stale_secs = env("LAN_STALE_SECS");
+if (stale_secs == null) { stale_secs = "300"; }
+
+// 读并解析快照;文件缺失/JSON 损坏 → 返回 null。
+func load_snapshot() {
+  let txt = read_file(snap_path);
+  if (txt == null) { return null; }
+  let r = try(() => json(txt));
+  if (r.err != null) { return null; }
+  return r.ok;
+}
+
+// 设备列表:读快照 + 派生统计(总数/在线数/是否过期)。缺失 → 空表 + 指引文案。
+export func devices_payload() {
+  let s = load_snapshot();
+  let nowts = int(now());
+  if (s == null) {
+    return {
+      ok: true,
+      missing: true,
+      gateway: "",
+      subnet: "",
+      scanned_at: 0,
+      sweep: false,
+      count: 0,
+      live_count: 0,
+      devices: [],
+      stale: false,
+      note: "暂无快照——先在宿主跑 make scan(或 python3 scripts/scan_lan.py)生成 .data/devices.json",
+    };
+  }
+  let devs = get(s, "devices", []);
+  let live = 0;
+  for (d in devs) {
+    if (get(d, "live", false) == true) {
+      live = live + 1;
+    }
+  }
+  let age = nowts - int(get(s, "scanned_at", 0));
+  if (age < 0) { age = 0; }
+  let stale = age > int(stale_secs);
+  let note = "";
+  if (stale) {
+    note = "快照已 " + int(age / 60) + " 分钟未刷新,宿主 make scan 可更新";
+  }
+  return {
+    ok: true,
+    missing: false,
+    gateway: get(s, "gateway", ""),
+    subnet: get(s, "subnet", ""),
+    scanned_at: int(get(s, "scanned_at", 0)),
+    sweep: get(s, "sweep", false),
+    count: len(devs),
+    live_count: live,
+    devices: devs,
+    stale: stale,
+    note: note,
+  };
+}
+
+// 元信息:网关 / 网段 / 快照时间 / 是否可用(前端据此显示刷新提示)。
+export func meta_payload() {
+  let s = load_snapshot();
+  if (s == null) {
+    return { gateway: "", subnet: "", sweep: false, scanned_at: 0, available: false };
+  }
+  return {
+    gateway: get(s, "gateway", ""),
+    subnet: get(s, "subnet", ""),
+    sweep: get(s, "sweep", false),
+    scanned_at: int(get(s, "scanned_at", 0)),
+    available: true,
+  };
+}

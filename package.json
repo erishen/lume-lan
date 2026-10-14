@@ -1,0 +1,11 @@
+{
+  "name": "lan-ui",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Lume LAN client: React + TypeScript SPA, bundled by esbuild into www/ for the Lume docroot. The Lume server (lan.lume) serves www/ with spa=true.",
+  "scripts": {
+    "build": "esbuild src/lan/app.tsx --bundle --minify --format=esm --jsx=automatic --outdir=www --outbase=src/lan",
+    "dev": "esbuild src/lan/app.tsx --bundle --format=esm --jsx=automatic --outdir=www --outbase=src/lan --watch"
+  },
+  "license": "MIT"
+}

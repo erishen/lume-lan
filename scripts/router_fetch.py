@@ -229,6 +229,60 @@ def extract_hostinfo(payload) -> list:
     return out
 
 
+def extract_topology(payload) -> dict:
+    """device/topology(顶层 list)→ 归一化 {mac→{rssi,link_quality,access_type,active}}。
+    路由器 HostInfo 里 RSSI 恒为 0, 但 topology 端点带真实 RSSI(0~100)+链路质量,
+    用它给终端列表补「信号强度」。路由器自身(routerSelf=1)那条无 MAC, 跳过。"""
+    seq = payload if isinstance(payload, list) else []
+    m = {}
+    for d in seq:
+        if not isinstance(d, dict) or d.get("routerSelf") == 1:
+            continue
+        mac = str(d.get("MACAddress") or "").lower()
+        if not mac:
+            continue
+        m[mac] = {
+            "rssi": int(d.get("RSSI") or 0),
+            "link_quality": str(d.get("LinkQuality") or "").strip(),
+            "access_type": str(d.get("AccessType") or "").strip(),
+            "active": bool(d.get("Active")),
+        }
+    return m
+
+
+def extract_wan(payload) -> dict:
+    """ntwk/wan(顶层 list, 多条 WAN 连接)→ 取默认/第一条有效的, 归一化成一张状态卡。"""
+    seq = payload if isinstance(payload, list) else []
+    wans = [d for d in seq if isinstance(d, dict) and (d.get("Enable") or d.get("IsDefault"))]
+    if not wans:
+        return {}
+    w = wans[0]
+    # 带宽峰值(kbps): 历史串取最大值
+    def max_hist(key):
+        try:
+            vals = [int(x) for x in str(w.get(key) or "").split(",") if x]
+            return max(vals) if vals else int(w.get(key.replace("History", "Max")) or 0)
+        except Exception:
+            return 0
+    return {
+        "status": str(w.get("AccessStatus") or "").strip(),
+        "connection": str(w.get("ConnectionStatus") or "").strip(),
+        "access_type": str(w.get("AccessType") or "").strip(),
+        "ipv4_addr": str(w.get("IPv4Addr") or "").strip(),
+        "ipv4_mask": str(w.get("IPv4Mask") or "").strip(),
+        "ipv4_gateway": str(w.get("IPv4Gateway") or "").strip(),
+        "ipv4_addr_type": str(w.get("IPv4AddrType") or "").strip(),
+        "dns": str(w.get("IPv4DnsServers") or "").strip(),
+        "ipv6_addr": str(w.get("IPv6Addr") or "").strip(),
+        "ipv6_status": str(w.get("IPv6ConnectionStatus") or "").strip(),
+        "nat_type": int(w.get("NATType") or 0),
+        "mtu": int(w.get("MTU") or 0),
+        "up_max_kbps": max_hist("UpBandwidthHistory"),
+        "down_max_kbps": max_hist("DownBandwidthHistory"),
+        "conn_count": len(wans),
+    }
+
+
 def _load_last_devices() -> dict:
     """从 .data/router.json 读上次成功的终端数据（登录失败时沿用它，避免清成空）。"""
     try:
@@ -380,6 +434,7 @@ def main():
 
     devices, source, login = [], "", {"ok": False, "level": 0, "error": ""}
     stale = False  # 本次是否沿用上次的终端数据
+    topo, wan = {}, {}  # device/topology(信号强度) + ntwk/wan(WAN 状态), 仅登录态抓
 
     # 登录冷却: 上次失败后 LOGIN_COOLDOWN_SECS 内不再尝试, 避免 60s 循环把限流锁越打越紧。
     cooldown = (fetched_at - _read_fail_ts()) < LOGIN_COOLDOWN_SECS
@@ -412,6 +467,32 @@ def main():
                           "auth": "session", "status": code,
                           "ok": bool(devices),
                           "note": f"{len(devices)} hosts" if devices else f"http={code}"})
+            # 补抓: 信号强度(device/topology) + WAN 状态(ntwk/wan)。失败不致命, 留空降级。
+            try:
+                tc, ttop = sess.get_json("/api/device/topology")
+                topo = extract_topology(ttop)
+                # 把 topology 的真实 RSSI/链路质量按 MAC 合并进终端列表(HostInfo 的 RSSI 恒为 0)
+                for d in devices:
+                    t = topo.get(str(d.get("mac", "")).lower())
+                    if t:
+                        d["rssi"] = t.get("rssi", 0)
+                        d["link_quality"] = t.get("link_quality", "")
+                        d["access_type"] = t.get("access_type", "")
+                probe.append({"endpoint": "api/device/topology", "method": "GET",
+                              "auth": "session", "status": tc, "ok": bool(topo),
+                              "note": f"{len(topo)} nodes with rssi" if topo else f"http={tc}"})
+            except Exception as e:
+                probe.append({"endpoint": "api/device/topology", "method": "GET",
+                              "auth": "session", "status": -1, "ok": False, "note": f"EXC {e}"})
+            try:
+                wc, wwan = sess.get_json("/api/ntwk/wan")
+                wan = extract_wan(wwan)
+                probe.append({"endpoint": "api/ntwk/wan", "method": "GET",
+                              "auth": "session", "status": wc, "ok": bool(wan),
+                              "note": wan.get("status", f"http={wc}") if wan else f"http={wc}"})
+            except Exception as e:
+                probe.append({"endpoint": "api/ntwk/wan", "method": "GET",
+                              "auth": "session", "status": -1, "ok": False, "note": f"EXC {e}"})
         else:
             # 登录失败（限流/密码错）：记冷却时间戳 + 保留上次成功的终端数据
             _write_fail_ts(fetched_at)
@@ -447,6 +528,8 @@ def main():
                   "stale_note": login.get("stale_note", "")},
         "terminal_source": source,
         "router_devices": devices,
+        "router_topology": topo,
+        "router_wan": wan,
         "router_active": sum(1 for d in devices
                              if d.get("online")
                              and (d.get("delta_1h") is None or d.get("delta_1h", 0) >= 1048576)),

@@ -192,6 +192,34 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .rtrtop-net { flex: 0 0 auto; font-size: 0.78rem; color: var(--muted); white-space: nowrap; min-width: 120px; text-align: right; }
 .rtrtop-rate { flex: 0 0 auto; font-size: 0.72rem; color: var(--ok); white-space: nowrap; min-width: 70px; text-align: right; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
+/* WAN 状态卡(默认连接/接入方式/IPv4/IPv6/DNS/NAT/带宽峰值) */
+.wancard { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; }
+.wan-title { font-size: 0.82rem; font-weight: 600; color: var(--fg); margin-bottom: 8px; }
+.wan-status { display: inline-flex; align-items: center; gap: 6px; font-size: 0.9rem; font-weight: 600; padding: 3px 10px; border-radius: 8px; background: rgba(22,163,74,0.14); color: var(--ok); }
+.wan-status.down { background: rgba(220,38,38,0.14); color: var(--warn); }
+.wan-grid { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 0.82rem; }
+.wan-cell { color: var(--muted); }
+.wan-cell b { color: var(--fg); font-weight: 600; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* RSSI 信号强度柱(终端列表右侧, 3 段) */
+.rssi { display: inline-flex; align-items: flex-end; gap: 1px; }
+.rssi i { width: 3px; border-radius: 1px; background: rgba(120,130,150,0.3); }
+.rssi i:nth-child(1) { height: 4px; }
+.rssi i:nth-child(2) { height: 7px; }
+.rssi i:nth-child(3) { height: 10px; }
+.rssi.good i { background: var(--ok); }
+.rssi.mid i { background: #d97706; }
+.rssi.bad i { background: var(--warn); }
+.rssi.none i { background: rgba(120,130,150,0.5); }
+.rssi.wired { display: none; }
+
+/* 异常流量告警 */
+.alert { margin-top: 12px; border: 1px solid rgba(220,38,38,0.4); background: rgba(220,38,38,0.08); color: #b91c1c; border-radius: 8px; padding: 8px 12px; font-size: 0.85rem; line-height: 1.5; }
+
+/* 导出 CSV 按钮(工具栏右侧, 紧跟刷新) */
+.btn.ghost { background: none; color: var(--accent); border: 1px solid var(--line); }
+.btn.ghost:hover { background: rgba(37,99,235,0.08); }
+
 /* 家庭流量趋势(纯 div 柱状图) */
 .trend { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; }
 .trend-title { font-size: 0.82rem; font-weight: 600; color: var(--fg); margin-bottom: 8px; }

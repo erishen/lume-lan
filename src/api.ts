@@ -41,7 +41,12 @@ export interface RouterDevice {
   tx_bytes?: number;
   up_rate?: number;
   down_rate?: number;
+  /** 信号强度(0~100), 来自 device/topology(HostInfo 的 RSSI 恒为 0)。 */
   rssi?: number | null;
+  /** 链路质量(High/Medium/Low)。 */
+  link_quality?: string;
+  /** 接入方式(Wireless/Ethernet)。 */
+  access_type?: string;
   online?: boolean;
   wired?: boolean | null;
   guest?: boolean;
@@ -52,6 +57,33 @@ export interface RouterDevice {
   icon?: string;
   /** Wi-Fi 频段(5GHz/2.4GHz)。 */
   freq?: string;
+}
+
+/** WAN 状态(来自 ntwk/wan, 默认/主连接)。 */
+export interface WanStatus {
+  status?: string;
+  connection?: string;
+  access_type?: string;
+  ipv4_addr?: string;
+  ipv4_mask?: string;
+  ipv4_gateway?: string;
+  ipv4_addr_type?: string;
+  dns?: string;
+  ipv6_addr?: string;
+  ipv6_status?: string;
+  nat_type?: number;
+  mtu?: number;
+  up_max_kbps?: number;
+  down_max_kbps?: number;
+  conn_count?: number;
+}
+
+/** 拓扑节点信号(device/topology 按 mac 索引)。 */
+export interface TopoNode {
+  rssi?: number;
+  link_quality?: string;
+  access_type?: string;
+  active?: boolean;
 }
 
 /** 家庭总流量序列的一个采样点(宿主每 60s 记一次, 全设备 rx+tx 累计求和)。 */
@@ -91,6 +123,10 @@ export interface RouterPayload {
   router_traffic_total?: TrafficPoint[];
   /** 本地命名层(.data/aliases.json): {ip: 名字}。显示时优先级高于路由器备注。 */
   router_aliases?: Record<string, string>;
+  /** WAN 状态卡(ntwk/wan: 连接态/接入方式/IPv4/IPv6/DNS/NAT/带宽峰值)。 */
+  router_wan?: WanStatus;
+  /** 信号强度拓扑(device/topology: mac→{rssi,link_quality,access_type})。 */
+  router_topology?: Record<string, TopoNode>;
 }
 
 export async function apiGet<T>(url: string): Promise<T> {

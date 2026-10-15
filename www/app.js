@@ -24602,6 +24602,65 @@ function TrafficChart({ rows, max, peakIdx, peak }) {
     ] })
   ] });
 }
+function Rssi({ rssi, wired, linkQuality }) {
+  if (wired) {
+    return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rssi wired", title: "\u6709\u7EBF\u63A5\u5165" });
+  }
+  if (rssi === void 0 || rssi === null) {
+    return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dim", title: "\u672A\u77E5\u63A5\u5165\u65B9\u5F0F", children: "\u2014" });
+  }
+  let cls = "good";
+  if (rssi < 30) cls = "bad";
+  else if (rssi < 50) cls = "mid";
+  const on = cls === "good" ? 3 : cls === "mid" ? 2 : 1;
+  const lq = linkQuality ? ` \xB7 ${linkQuality}` : "";
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rssi " + cls, title: `\u4FE1\u53F7 ${rssi}${lq}`, children: [1, 2, 3].map((i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { style: i <= on ? {} : void 0 }, i)) });
+}
+function WanCard({ wan }) {
+  if (!wan || !wan.status) return null;
+  const up = wan.status === "Up" || wan.connection === "Connected";
+  const mbps = (k) => k && k > 0 ? (k / 1e3).toFixed(1) + " Mbps" : "\u2014";
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "wancard", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "wan-title", children: [
+      "WAN \u72B6\u6001\uFF08",
+      wan.access_type || "\u4EE5\u592A\u7F51",
+      "\u63A5\u5165\uFF09"
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "wan-status" + (up ? "" : " down"), children: up ? "\u25CF \u5DF2\u8FDE\u63A5" : "\u25CB \u65AD\u5F00" }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "wan-grid", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "wan-cell", children: [
+        "IPv4 ",
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: wan.ipv4_addr || "\u2014" }),
+        wan.ipv4_addr_type ? " \xB7 " + wan.ipv4_addr_type : ""
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "wan-cell", children: [
+        "\u7F51\u5173 ",
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: wan.ipv4_gateway || "\u2014" })
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "wan-cell", children: [
+        "DNS ",
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: wan.dns || "\u2014" })
+      ] }),
+      wan.ipv6_addr ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "wan-cell", children: [
+        "IPv6 ",
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: wan.ipv6_addr.split("/")[0] })
+      ] }) : null,
+      wan.nat_type ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "wan-cell", children: [
+        "NAT \u7C7B\u578B ",
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: wan.nat_type })
+      ] }) : null,
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "wan-cell", title: "\u672C\u89C2\u6D4B\u7A97\u5185\u5E26\u5BBD\u5CF0\u503C(\u8DEF\u7531\u5668 BandwidthHistory \u5386\u53F2\u4E32\u6700\u5927\u503C)", children: [
+        "\u5CF0\u503C ",
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("b", { children: [
+          mbps(wan.up_max_kbps),
+          "\u2191 / ",
+          mbps(wan.down_max_kbps),
+          "\u2193"
+        ] })
+      ] })
+    ] })
+  ] });
+}
 function Dashboard() {
   const [data, setData] = import_react.default.useState(null);
   const [router, setRouter] = import_react.default.useState(null);
@@ -24735,6 +24794,51 @@ function Dashboard() {
     const peak = rows[peakIdx];
     return { rows, max, peakIdx, peak };
   }, [router]);
+  const ANOMALY_BYTES = 10 * 1024 * 1024 * 1024;
+  const anomalies = import_react.default.useMemo(() => {
+    const out = [];
+    router?.router_devices?.forEach((d) => {
+      if (!d.online || d.delta_1h === void 0 || d.delta_1h === null) return;
+      if (d.delta_1h >= ANOMALY_BYTES) out.push({ ip: d.ip, name: d.hostname || d.vendor || d.mac, d: d.delta_1h });
+    });
+    return out.sort((a, b) => b.d - a.d);
+  }, [router]);
+  const exportCsv = import_react.default.useCallback(() => {
+    const rows = router?.router_devices || [];
+    const head = ["ip", "name", "vendor", "mac", "online", "active", "freq", "type", "rssi", "link_quality", "access", "rx_bytes", "tx_bytes", "delta_1h_bytes", "last_seen"];
+    const esc = (v) => {
+      const s = v === void 0 || v === null ? "" : String(v);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const lines = [head.join(",")];
+    for (const d of rows) {
+      lines.push([
+        d.ip,
+        ipNames.get(d.ip) || d.hostname || "",
+        d.vendor,
+        d.mac,
+        d.online ? 1 : 0,
+        d.online && isActive(d) ? 1 : 0,
+        d.freq,
+        d.icon,
+        d.rssi ?? "",
+        d.link_quality,
+        d.access_type,
+        d.rx_bytes ?? 0,
+        d.tx_bytes ?? 0,
+        d.delta_1h ?? "",
+        d.last_seen
+      ].map(esc).join(","));
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "lume-lan-devices-" + (/* @__PURE__ */ new Date()).toISOString().slice(0, 10) + ".csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+  }, [router, ipNames]);
   const [showAll, setShowAll] = import_react.default.useState(false);
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dash", children: [
     data && !data.missing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -24784,6 +24888,21 @@ function Dashboard() {
           "\u23F3 ",
           router.login_stale_note || "\u672C\u6B21\u767B\u5F55\u5931\u8D25/\u51B7\u5374\u4E2D\uFF0C\u4EE5\u4E0B\u6CBF\u7528\u4E0A\u6B21\u7684\u7EC8\u7AEF\u6570\u636E",
           "\uFF08\u81EA\u52A8\u5FAA\u73AF\u7A0D\u540E\u91CD\u8BD5\uFF0C\u65E0\u9700\u64CD\u4F5C\uFF09"
+        ] }) : null,
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WanCard, { wan: router.router_wan }),
+        anomalies.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "alert", children: [
+          "\u26A0\uFE0F ",
+          anomalies.length,
+          " \u53F0\u8BBE\u5907\u8FD1 1h \u6D41\u91CF\u5F02\u5E38\u504F\u9AD8\uFF08\u226510GB\uFF09\uFF1A",
+          anomalies.map((a, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_react.default.Fragment, { children: [
+            i > 0 ? "\u3001" : null,
+            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("b", { title: a.ip, children: [
+              a.name,
+              "\uFF08",
+              fmtBytes(a.d),
+              "\uFF09"
+            ] })
+          ] }, a.ip))
         ] }) : null,
         trafficTrend ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TrafficChart, { rows: trafficTrend.rows, max: trafficTrend.max, peakIdx: trafficTrend.peakIdx, peak: trafficTrend.peak }) : null,
         typeDist.length > 0 || freqDist.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrdist", children: [
@@ -24857,6 +24976,7 @@ function Dashboard() {
               /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-ip mono", children: d.ip }),
               /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-host", children: d.hostname || d.mac }),
               d.vendor ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-vendor", children: d.vendor }) : null,
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Rssi, { rssi: d.rssi, wired: d.wired, linkQuality: d.link_quality }),
               d.guest ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-tag", children: "\u8BBF\u5BA2" }) : null,
               /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "rtrdev-net", children: [
                 "\u2191",
@@ -24921,6 +25041,7 @@ function Dashboard() {
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "make scan" }),
           " \u5237\u65B0\u6570\u636E\u6E90"
         ] }),
+        router?.router_devices && router.router_devices.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "btn ghost", onClick: exportCsv, title: "\u5BFC\u51FA\u5F53\u524D\u7EC8\u7AEF\u5217\u8868\u4E3A CSV(IP/\u540D\u79F0/\u5382\u5546/\u6D41\u91CF/\u4FE1\u53F7/\u6700\u540E\u6D3B\u8DC3)", children: "\u5BFC\u51FA CSV" }) : null,
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "btn", onClick: () => void load(), children: "\u5237\u65B0" })
       ] }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "tablewrap", children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("table", { className: "devs", children: [

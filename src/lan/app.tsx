@@ -103,6 +103,48 @@ function TrafficChart({ rows, max, peakIdx, peak }: {
   );
 }
 
+/* 信号强度柱(3 段, 按 rssi 0~100 映射 good/mid/bad; 有线/未知显示 —)。
+ * rssi 来自 device/topology(HostInfo 的 RSSI 恒 0)。 */
+function Rssi({ rssi, wired, linkQuality }: { rssi?: number | null; wired?: boolean | null; linkQuality?: string }): React.ReactElement {
+  if (wired) {
+    return <span className="rssi wired" title="有线接入" />;
+  }
+  if (rssi === undefined || rssi === null) {
+    return <span className="dim" title="未知接入方式">—</span>;
+  }
+  let cls = "good";
+  if (rssi < 30) cls = "bad";
+  else if (rssi < 50) cls = "mid";
+  const on = cls === "good" ? 3 : cls === "mid" ? 2 : 1;
+  const lq = linkQuality ? ` · ${linkQuality}` : "";
+  return (
+    <span className={"rssi " + cls} title={`信号 ${rssi}${lq}`}>
+      {[1, 2, 3].map((i) => <i key={i} style={i <= on ? {} : undefined} />)}
+    </span>
+  );
+}
+
+/* WAN 状态卡: 默认/主连接的状态(连接态/接入方式/IPv4/IPv6/DNS/NAT 类型/带宽峰值)。 */
+function WanCard({ wan }: { wan: RouterPayload["router_wan"] }): React.ReactElement | null {
+  if (!wan || !wan.status) return null;
+  const up = wan.status === "Up" || wan.connection === "Connected";
+  const mbps = (k?: number) => (k && k > 0 ? (k / 1000).toFixed(1) + " Mbps" : "—");
+  return (
+    <div className="wancard">
+      <div className="wan-title">WAN 状态（{wan.access_type || "以太网"}接入）</div>
+      <span className={"wan-status" + (up ? "" : " down")}>{up ? "● 已连接" : "○ 断开"}</span>
+      <div className="wan-grid">
+        <span className="wan-cell">IPv4 <b>{wan.ipv4_addr || "—"}</b>{wan.ipv4_addr_type ? " · " + wan.ipv4_addr_type : ""}</span>
+        <span className="wan-cell">网关 <b>{wan.ipv4_gateway || "—"}</b></span>
+        <span className="wan-cell">DNS <b>{wan.dns || "—"}</b></span>
+        {wan.ipv6_addr ? <span className="wan-cell">IPv6 <b>{wan.ipv6_addr.split("/")[0]}</b></span> : null}
+        {wan.nat_type ? <span className="wan-cell">NAT 类型 <b>{wan.nat_type}</b></span> : null}
+        <span className="wan-cell" title="本观测窗内带宽峰值(路由器 BandwidthHistory 历史串最大值)">峰值 <b>{mbps(wan.up_max_kbps)}↑ / {mbps(wan.down_max_kbps)}↓</b></span>
+      </div>
+    </div>
+  );
+}
+
 function Dashboard(): React.ReactElement {
   const [data, setData] = React.useState<DevicesPayload | null>(null);
   const [router, setRouter] = React.useState<RouterPayload | null>(null);
@@ -258,6 +300,42 @@ function Dashboard(): React.ReactElement {
     const peak = rows[peakIdx];
     return { rows, max, peakIdx, peak };
   }, [router]);
+
+  /* 异常流量告警: 在线设备近 1h 增量 ≥ ANOMALY_BYTES(默认 10GB)就提示, 帮发现"谁在猛传"。 */
+  const ANOMALY_BYTES = 10 * 1024 * 1024 * 1024;
+  const anomalies = React.useMemo(() => {
+    const out: { ip: string; name: string; d: number }[] = [];
+    router?.router_devices?.forEach((d) => {
+      if (!d.online || d.delta_1h === undefined || d.delta_1h === null) return;
+      if (d.delta_1h >= ANOMALY_BYTES) out.push({ ip: d.ip, name: d.hostname || d.vendor || d.mac, d: d.delta_1h });
+    });
+    return out.sort((a, b) => b.d - a.d);
+  }, [router]);
+
+  /* 导出当前列表为 CSV(32 台终端 + 流量 + 备注 + 信号), 供存档。 */
+  const exportCsv = React.useCallback(() => {
+    const rows = router?.router_devices || [];
+    const head = ["ip", "name", "vendor", "mac", "online", "active", "freq", "type", "rssi", "link_quality", "access", "rx_bytes", "tx_bytes", "delta_1h_bytes", "last_seen"];
+    const esc = (v: unknown) => {
+      const s = v === undefined || v === null ? "" : String(v);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const lines = [head.join(",")];
+    for (const d of rows) {
+      lines.push([
+        d.ip, ipNames.get(d.ip) || d.hostname || "", d.vendor, d.mac,
+        d.online ? 1 : 0, d.online && isActive(d) ? 1 : 0,
+        d.freq, d.icon, d.rssi ?? "", d.link_quality, d.access_type,
+        d.rx_bytes ?? 0, d.tx_bytes ?? 0, d.delta_1h ?? "", d.last_seen,
+      ].map(esc).join(","));
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "lume-lan-devices-" + new Date().toISOString().slice(0, 10) + ".csv";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+  }, [router, ipNames]);
   const [showAll, setShowAll] = React.useState(false);
 
   return (
@@ -283,6 +361,20 @@ function Dashboard(): React.ReactElement {
               {router.login_stale && (router.router_count ?? 0) > 0 ? (
                 <div className="rtrstale">
                   ⏳ {router.login_stale_note || "本次登录失败/冷却中，以下沿用上次的终端数据"}（自动循环稍后重试，无需操作）
+                </div>
+              ) : null}
+              <WanCard wan={router.router_wan} />
+              {anomalies.length > 0 ? (
+                <div className="alert">
+                  ⚠️ {anomalies.length} 台设备近 1h 流量异常偏高（≥10GB）：
+                  {anomalies.map((a, i) => (
+                    <React.Fragment key={a.ip}>
+                      {i > 0 ? "、" : null}
+                      <b title={a.ip}>
+                        {a.name}（{fmtBytes(a.d)}）
+                      </b>
+                    </React.Fragment>
+                  ))}
                 </div>
               ) : null}
               {trafficTrend ? <TrafficChart rows={trafficTrend.rows} max={trafficTrend.max} peakIdx={trafficTrend.peakIdx} peak={trafficTrend.peak} /> : null}
@@ -353,6 +445,7 @@ function Dashboard(): React.ReactElement {
                       <span className="rtrdev-ip mono">{d.ip}</span>
                       <span className="rtrdev-host">{d.hostname || d.mac}</span>
                       {d.vendor ? <span className="rtrdev-vendor">{d.vendor}</span> : null}
+                      <Rssi rssi={d.rssi} wired={d.wired} linkQuality={d.link_quality} />
                       {d.guest ? <span className="rtrdev-tag">访客</span> : null}
                       <span className="rtrdev-net">↑{fmtBytes(d.tx_bytes)} ↓{fmtBytes(d.rx_bytes)}</span>
                       {d.last_seen ? <span className="rtrdev-last">{d.last_seen.slice(5)}</span> : null}
@@ -399,6 +492,9 @@ function Dashboard(): React.ReactElement {
             ) : null}
             <span className="spacer" />
             <span className="hint">快照于 {fmtTs(data.scanned_at)} · 宿主 <code>make scan</code> 刷新数据源</span>
+            {router?.router_devices && router.router_devices.length > 0 ? (
+              <button className="btn ghost" onClick={exportCsv} title="导出当前终端列表为 CSV(IP/名称/厂商/流量/信号/最后活跃)">导出 CSV</button>
+            ) : null}
             <button className="btn" onClick={() => void load()}>刷新</button>
           </div>
           <div className="tablewrap">

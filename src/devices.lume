@@ -143,5 +143,9 @@ export func router_payload() {
     // 本地命名层(.data/aliases.json): {ip: 名字}。前端显示时优先级最高,
     // 覆盖路由器备注(ActualName)与设备自报(HostName), 且不依赖登录态。
     router_aliases: load_aliases(),
+    // WAN 状态卡(ntwk/wan: 连接态/接入方式/IPv4/IPv6/DNS/NAT 类型/带宽峰值)。
+    router_wan: get(ro, "router_wan", {}),
+    // 信号强度拓扑(device/topology: mac→{rssi,link_quality,access_type})。
+    router_topology: get(ro, "router_topology", {}),
   };
 }

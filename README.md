@@ -89,6 +89,35 @@ make ui            # 一次性构建前端（esbuild → www/app.js，非 watch�
 日常就 `make dev`：它会 `stop` 清掉上一次占端口的实例 → check → scan → router-fetch
 → 起 esbuild `--watch` + Lume（前台，`Ctrl-C` 退出时自动清 watch），`.tsx` 改动秒级热刷。
 
+## 容器运行（Docker）
+
+看板能整个跑进容器：拉 **产品版 `lume` 的全静态 Linux 二进制**（`erishen/lume` release 的
+`lume-linux-<x64|arm64>-static`，无 glibc/libsqlite 运行时依赖，免装 libLLVM）+ 仓库里已 build
+好的前端 `www/`（**不跑 node/esbuild**），容器只做「serve + 读快照」。
+
+**分工**（关键）：
+- **arp 扫描**（`scan_lan.py`）依赖宿主网卡，**只能在宿主跑**——宿主 `make scan` 写 `.data/devices.json`。
+- **路由器抓取**（`router_fetch.py`，纯 stdlib）可容器内跑，也可宿主跑。容器网络（Mac 的
+  Docker Desktop 默认 NAT / Linux `network_mode: host`）需能直连 `ROUTER_HOST`。
+
+```
+docker build -t lume-lan .
+docker run --rm -p 8091:8091 -v $PWD/.data:/app/.data lume-lan
+#   → http://127.0.0.1:8091
+```
+
+或用 `docker-compose.yml`（把 `ROUTER_PASS` 走 env 注入，不进镜像）：
+
+```
+make scan; make router-fetch        # 宿主先出 .data/ 快照
+export ROUTER_PASS='...'            # 供 compose 读, 不落盘
+docker compose up -d              # REFRESH=1 时容器内每 60s 自刷路由器; 默认 0 只 serve
+```
+
+- 多架构：`docker buildx build --platform linux/arm64,linux/amd64 -t lume-lan .`
+  （Apple Silicon 的 Docker Desktop 默认 arm64，`docker build` 会自动取对应二进制）。
+- 静态版全静态链接，仍基于 `python:3.12-slim`（容器内刷新循环要 python3），非 `scratch`。
+
 ## 路由器层（识别「设备使用情况」）
 
 设备表默认只有 IP/MAC/网卡（本地 arp，认不出「是什么设备 / 谁在用」）。加一层

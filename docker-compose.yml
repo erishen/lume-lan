@@ -1,0 +1,43 @@
+# Lume-LAN — docker compose
+#
+# 两种用法:
+#   A) 宿主刷新数据 + 容器只 serve(推荐, arp 扫描必须宿主):
+#        1) 宿主先跑一次 make scan + make router-fetch, 生成 .data/
+#        2) docker compose up -d   → 容器 serve 看板, 读挂载进来的 .data/
+#      arp 快照宿主负责(make dev 的 60s 循环), 容器读快照出 API。
+#
+#   B) 容器内自刷新路由器(REFRESH=1, 打 ROUTER_HOST):
+#        路由器/流量/终端在容器内循环更新; arp 快照仍靠宿主(容器无宿主网卡)。
+#
+# 凭据: ROUTER_PASS 走 compose environment(不写进镜像, .env 被 .dockerignore 排除)。
+#
+# 网络: Mac 的 Docker Desktop 默认 NAT 通常能直达 192.168.3.1(你的路由器)。
+#       若连不通, 改用 Linux host 网络: 在 services.lume-lan 加
+#       network_mode: host(并去掉 ports), 且 REFRESH=1。
+
+services:
+  lume-lan:
+    build: .
+    image: lume-lan
+    container_name: lume-lan
+    restart: unless-stopped
+    ports:
+      - "8091:8091"
+    environment:
+      # serve 侧
+      LUME_BIND: "0.0.0.0"
+      # 容器内自刷新路由器(=1 开, 打 ROUTER_HOST); arp 仍靠宿主
+      REFRESH: "0"
+      REFRESH_SECS: "60"
+      # 路由器
+      ROUTER_HOST: "192.168.3.1"
+      ROUTER_USER: "admin"
+      ROUTER_PASS: "${ROUTER_PASS:-}"   # 宿主 shell export 或 .env 提供, 不进镜像
+      # 可选公网 Basic Auth(本地用可省): 解开并放一个 htpasswd 文件挂进来
+      # HTPASSWD_FILE: "/auth/htpasswd"
+    volumes:
+      # 宿主 make scan / make router-fetch 产出的快照; 容器读它出 /api/*
+      - ./.data:/app/.data
+      # 可选: 路由凭据文件(若不用上面 ROUTER_PASS env)
+      # - ./.env:/app/.env:ro
+    # network_mode: host   # Linux host 网络(打不通 NAT 时启用, 并去掉 ports)

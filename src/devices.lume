@@ -125,5 +125,6 @@ export func router_payload() {
     router_devices: rdevs,
     router_count: len(rdevs),
     router_online: online_count,
+    router_active: int(get(ro, "router_active", 0)),
   };
 }

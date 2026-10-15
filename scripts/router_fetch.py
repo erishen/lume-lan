@@ -240,6 +240,58 @@ def _load_last_devices() -> dict:
     return {}
 
 
+# ---- 流量历史(算「近 1 小时增量」, 区分 活跃/挂起中) ----
+HIST = os.path.join(ROOT, ".data", "router_traffic_hist.json")
+HIST_CAP = 300      # 每 IP 保留的历史点数上限(60s 一循环 ≈ 5 小时, 远超基线所需)
+
+
+def _load_hist() -> dict:
+    """{ip: [{ts, rx, tx}, ...]} 按 ts 升序。"""
+    try:
+        with open(HIST, encoding="utf-8") as f:
+            h = json.load(f)
+        return h if isinstance(h, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_hist(hist: dict) -> None:
+    os.makedirs(os.path.dirname(HIST), exist_ok=True)
+    tmp = HIST + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(hist, f, ensure_ascii=False)
+    os.replace(tmp, HIST)
+
+
+def apply_traffic_deltas(devices: list, fetched_at: int) -> None:
+    """给每台设备算 delta_1h(近 ~1h 的流量增量, 字节; null=历史太短未知),
+    并把本轮累计值追加进历史。路由器流量计数器是单调累计值, 两点相减即增量。
+
+    基线取「至少 10 分钟前的最近一个点」: 这样数据循环跑 10 分钟起就能区分
+    活跃/挂起(心跳级增量 < 1MB), 满 1h 后窗口精确到 1h; 历史太短(未满 10min)
+    则返回 None, 前端按「活跃」显示, 避免误判。"""
+    MIN_BASELINE_AGE = 600  # 基线点至少要距今 10 分钟
+    hist = _load_hist()
+    for d in devices:
+        ip = str(d.get("ip") or "")
+        cur_rx = d.get("rx_bytes") or 0
+        cur_tx = d.get("tx_bytes") or 0
+        d["delta_1h"] = None
+        series = hist.get(ip, []) if ip else []
+        if series:
+            cutoff = fetched_at - MIN_BASELINE_AGE
+            base = [p for p in series if p.get("ts", 0) <= cutoff]
+            if base:
+                b = base[-1]
+                d["delta_1h"] = max(0, cur_rx - b.get("rx", 0)) + max(0, cur_tx - b.get("tx", 0))
+        if ip:
+            series.append({"ts": fetched_at, "rx": cur_rx, "tx": cur_tx})
+            while len(series) > HIST_CAP:
+                series.pop(0)
+            hist[ip] = series
+    _save_hist(hist)
+
+
 _FAIL_TS = os.path.join(ROOT, ".runtime", "router_login_fail_ts")
 LOGIN_COOLDOWN_SECS = 300  # 登录失败后 5min 内跳过尝试(限流冷却期),避免 60s 循环越打锁越紧
 
@@ -331,6 +383,9 @@ def main():
                       "auth": "sha256_simple", "status": 0, "ok": False,
                       "note": login["error"]})
 
+    # 计算近 1 小时流量增量(区分 活跃/挂起中), 并把本轮累计值记入历史
+    apply_traffic_deltas(devices, fetched_at)
+
     payload_out = {
         "router": router,
         "login": {"ok": login["ok"], "method": "sha256_simple",
@@ -339,6 +394,9 @@ def main():
                   "stale_note": login.get("stale_note", "")},
         "terminal_source": source,
         "router_devices": devices,
+        "router_active": sum(1 for d in devices
+                             if d.get("online")
+                             and (d.get("delta_1h") is None or d.get("delta_1h", 0) >= 1048576)),
         "probe": probe,
     }
     os.makedirs(os.path.dirname(OUT), exist_ok=True)

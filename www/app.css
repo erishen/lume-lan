@@ -197,6 +197,12 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .rtrdev-last { flex: 0 0 auto; font-size: 0.75rem; color: var(--muted); white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .rtrdev-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--off); }
 .rtrdev-dot.on { background: var(--ok); }
+.rtrdev-dot.idle { background: #d97706; }
+.rtrdev-state { flex: 0 0 auto; font-size: 0.72rem; min-width: 40px; text-align: right; }
+.rtrdev-state.st-on { color: var(--ok); }
+.rtrdev-state.st-idle { color: #d97706; }
+.rtrdev-state.st-off { color: var(--muted); }
+.rtrtop-live.idle { color: #d97706; }
 
 /* 页脚 */
 footer.foot { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 0.82rem; color: var(--muted); display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }

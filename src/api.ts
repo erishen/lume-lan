@@ -46,6 +46,8 @@ export interface RouterDevice {
   wired?: boolean | null;
   guest?: boolean;
   last_seen?: string;
+  /** 近 1 小时流量增量(字节); null/undefined = 历史不足未知。 */
+  delta_1h?: number | null;
 }
 
 export interface RouterPayload {
@@ -66,6 +68,8 @@ export interface RouterPayload {
   router_devices?: RouterDevice[];
   router_count?: number;
   router_online?: number;
+  /** 在线且近 1h 有实际流量(≥1MB)的设备数, 区别于「挂起中」的心跳设备。 */
+  router_active?: number;
 }
 
 export async function apiGet<T>(url: string): Promise<T> {

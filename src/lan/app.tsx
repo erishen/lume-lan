@@ -36,6 +36,14 @@ function navigate(href: string): void {
   window.dispatchEvent(new Event("lan:navigate"));
 }
 
+/* 近 1h 流量增量阈值: ≥ 1MB 视为「活跃」, 否则「挂起中」(心跳级)。
+ * delta_1h 为 null(历史刚建、未知)时, 在线设备默认按活跃显示, 不误伤。 */
+function isActive(d: RouterDevice): boolean {
+  if (!d.online) return false;
+  const delta = d.delta_1h;
+  return delta === undefined || delta === null ? true : delta >= 1048576;
+}
+
 /* 设备行:IP / 设备名(路由器 HostName/厂商,按 IP 关联) / MAC / 网卡 / 来源 / 在线态。 */
 function DeviceRow({ ip, mac, iface, source, live, gateway, name }: {
   ip: string; mac: string; iface?: string; source?: string; live?: boolean; gateway?: boolean; name?: string;
@@ -159,7 +167,7 @@ function Dashboard(): React.ReactElement {
                 {router.model ? <span className="routermeta">{router.model}</span> : null}
                 {router.serial ? <span className="routermeta mono">SN {router.serial}</span> : null}
                 {router.manufacturer_oui ? <span className="routermeta">OUI {router.manufacturer_oui}</span> : null}
-                {(router.router_count ?? 0) > 0 ? <span className="routermeta">· {router.router_count} 台终端，在线 {router.router_online ?? "—"}</span> : null}
+                {(router.router_count ?? 0) > 0 ? <span className="routermeta">· {router.router_count} 台终端，在线 {router.router_online ?? "—"}{typeof router.router_active === "number" ? `（活跃 ${router.router_active}）` : ""}</span> : null}
               </div>
               {router.login_stale && (router.router_count ?? 0) > 0 ? (
                 <div className="rtrstale">
@@ -175,7 +183,7 @@ function Dashboard(): React.ReactElement {
                       <span className="rtrtop-name">{item.d.hostname || item.d.mac}</span>
                       <span className="rtrtop-ip mono">{item.d.ip}</span>
                       {item.d.vendor ? <span className="rtrtop-vendor">{item.d.vendor}</span> : null}
-                      {item.d.online ? <span className="rtrtop-live">在线</span> : null}
+                      {item.d.online ? <span className={"rtrtop-live" + (isActive(item.d) ? "" : " idle")}>{isActive(item.d) ? "活跃" : "挂起"}</span> : null}
                       <div className="rtrtop-bar"><div style={{ width: item.pct + "%" }} /></div>
                       <span className="rtrtop-net">↓{fmtBytes(item.d.rx_bytes)} · ↑{fmtBytes(item.d.tx_bytes)}</span>
                     </div>
@@ -189,17 +197,23 @@ function Dashboard(): React.ReactElement {
                       {showAll ? "收起完整列表" : `展开全部 ${router.router_count} 台终端`}
                     </button>
                   ) : null}
-                  {(showAll ? router.router_devices : (router.router_devices?.slice(0, 5) ?? [])).map((d) => (
-                    <div key={d.ip + d.mac} className={"rtrdev" + (d.online ? "" : " off")}>
+                  {(showAll ? router.router_devices : (router.router_devices?.slice(0, 5) ?? [])).map((d) => {
+                    const st = !d.online ? "off" : isActive(d) ? "on" : "idle";
+                    return (
+                    <div key={d.ip + d.mac} className={"rtrdev " + (d.online ? "" : "off")}>
                       <span className="rtrdev-ip mono">{d.ip}</span>
                       <span className="rtrdev-host">{d.hostname || d.mac}</span>
                       {d.vendor ? <span className="rtrdev-vendor">{d.vendor}</span> : null}
                       {d.guest ? <span className="rtrdev-tag">访客</span> : null}
                       <span className="rtrdev-net">↑{fmtBytes(d.tx_bytes)} ↓{fmtBytes(d.rx_bytes)}</span>
                       {d.last_seen ? <span className="rtrdev-last">{d.last_seen.slice(5)}</span> : null}
-                      <span className={"rtrdev-dot" + (d.online ? " on" : "")} />
+                      <span className={"rtrdev-state st-" + st}>
+                        {st === "off" ? "离线" : st === "idle" ? "挂起中" : "活跃"}
+                      </span>
+                      <span className={"rtrdev-dot " + st} />
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="routernote">

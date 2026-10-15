@@ -24542,6 +24542,11 @@ function navigate(href) {
   window.history.pushState(null, "", url.pathname + url.search);
   window.dispatchEvent(new Event("lan:navigate"));
 }
+function isActive(d) {
+  if (!d.online) return false;
+  const delta = d.delta_1h;
+  return delta === void 0 || delta === null ? true : delta >= 1048576;
+}
 function DeviceRow({ ip, mac, iface, source, live, gateway, name }) {
   const on = live === false ? "off" : "on";
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { className: "row-" + on, children: [
@@ -24667,7 +24672,8 @@ function Dashboard() {
             "\xB7 ",
             router.router_count,
             " \u53F0\u7EC8\u7AEF\uFF0C\u5728\u7EBF ",
-            router.router_online ?? "\u2014"
+            router.router_online ?? "\u2014",
+            typeof router.router_active === "number" ? `\uFF08\u6D3B\u8DC3 ${router.router_active}\uFF09` : ""
           ] }) : null
         ] }),
         router.login_stale && (router.router_count ?? 0) > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrstale", children: [
@@ -24686,7 +24692,7 @@ function Dashboard() {
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrtop-name", children: item.d.hostname || item.d.mac }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrtop-ip mono", children: item.d.ip }),
             item.d.vendor ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrtop-vendor", children: item.d.vendor }) : null,
-            item.d.online ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrtop-live", children: "\u5728\u7EBF" }) : null,
+            item.d.online ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrtop-live" + (isActive(item.d) ? "" : " idle"), children: isActive(item.d) ? "\u6D3B\u8DC3" : "\u6302\u8D77" }) : null,
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "rtrtop-bar", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { width: item.pct + "%" } }) }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "rtrtop-net", children: [
               "\u2193",
@@ -24698,20 +24704,24 @@ function Dashboard() {
         ] }) : null,
         router.router_devices && router.router_devices.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrdevs", children: [
           router.router_devices && router.router_devices.length > 5 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "rtrdevs-toggle", onClick: () => setShowAll(!showAll), children: showAll ? "\u6536\u8D77\u5B8C\u6574\u5217\u8868" : `\u5C55\u5F00\u5168\u90E8 ${router.router_count} \u53F0\u7EC8\u7AEF` }) : null,
-          (showAll ? router.router_devices : router.router_devices?.slice(0, 5) ?? []).map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrdev" + (d.online ? "" : " off"), children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-ip mono", children: d.ip }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-host", children: d.hostname || d.mac }),
-            d.vendor ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-vendor", children: d.vendor }) : null,
-            d.guest ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-tag", children: "\u8BBF\u5BA2" }) : null,
-            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "rtrdev-net", children: [
-              "\u2191",
-              fmtBytes(d.tx_bytes),
-              " \u2193",
-              fmtBytes(d.rx_bytes)
-            ] }),
-            d.last_seen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-last", children: d.last_seen.slice(5) }) : null,
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-dot" + (d.online ? " on" : "") })
-          ] }, d.ip + d.mac))
+          (showAll ? router.router_devices : router.router_devices?.slice(0, 5) ?? []).map((d) => {
+            const st = !d.online ? "off" : isActive(d) ? "on" : "idle";
+            return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrdev " + (d.online ? "" : "off"), children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-ip mono", children: d.ip }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-host", children: d.hostname || d.mac }),
+              d.vendor ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-vendor", children: d.vendor }) : null,
+              d.guest ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-tag", children: "\u8BBF\u5BA2" }) : null,
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "rtrdev-net", children: [
+                "\u2191",
+                fmtBytes(d.tx_bytes),
+                " \u2193",
+                fmtBytes(d.rx_bytes)
+              ] }),
+              d.last_seen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-last", children: d.last_seen.slice(5) }) : null,
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-state st-" + st, children: st === "off" ? "\u79BB\u7EBF" : st === "idle" ? "\u6302\u8D77\u4E2D" : "\u6D3B\u8DC3" }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-dot " + st })
+            ] }, d.ip + d.mac);
+          })
         ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "routernote", children: router.login_stale_note ? "\u23F3 " + router.login_stale_note + "\uFF08\u81EA\u52A8\u5FAA\u73AF\u7A0D\u540E\u91CD\u8BD5\uFF0C\u65E0\u9700\u64CD\u4F5C\uFF09" : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
           "\u767B\u5F55\u6001\u7EC8\u7AEF\u5217\u8868\u672A\u53D6\u5230\uFF1A",
           router.login_error ? "\u8DEF\u7531\u5668\u767B\u5F55\u5931\u8D25" : "\u65E0\u6570\u636E",

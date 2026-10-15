@@ -118,6 +118,7 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .iface { font-size: 0.85em; color: var(--muted); }
 .src { font-size: 0.75rem; padding: 1px 6px; border-radius: 5px; background: rgba(120, 130, 150, 0.12); color: var(--muted); }
 .src.sweep { background: rgba(22, 163, 74, 0.14); color: var(--ok); }
+.src.router { background: rgba(37, 99, 235, 0.14); color: var(--accent); }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
 .dot.on { background: var(--ok); }
 .dot.off { background: var(--off); }

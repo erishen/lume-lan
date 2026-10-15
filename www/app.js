@@ -24552,7 +24552,7 @@ function DeviceRow({ ip, mac, iface, source, live, gateway, name }) {
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: name ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "devname", title: name, children: name }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dim", children: "\u2014" }) }),
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { className: "mono", children: mac || /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dim", children: "\u2014" }) }),
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: iface ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "iface", children: iface }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dim", children: "\u2014" }) }),
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "src src-" + (source || "arp"), children: source || "arp" }) }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "src src-" + (source || "arp"), children: source === "router" ? "\u8DEF\u7531\u5668" : source === "sweep" ? "Ping" : "ARP" }) }),
     /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("td", { children: [
       on === "on" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dot on" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dot off" }),
       on === "on" ? "\u5728\u7EBF" : "\u79BB\u7EBF"
@@ -24593,14 +24593,31 @@ function Dashboard() {
   }, [router]);
   const shown = import_react.default.useMemo(() => {
     if (!data) return [];
+    const list = [...data.devices];
+    if (router?.login_ok && router.router_devices) {
+      const arpIps = new Set(list.map((d) => d.ip));
+      for (const rd of router.router_devices) {
+        if (!rd.online || !rd.ip || arpIps.has(rd.ip)) continue;
+        list.push({
+          ip: rd.ip,
+          mac: rd.mac || "",
+          live: true,
+          source: "router",
+          iface: "",
+          gateway: data.gateway ? rd.ip === data.gateway : void 0
+        });
+      }
+    }
     const k = kw.trim().toLowerCase();
-    return data.devices.filter((d) => {
+    return list.filter((d) => {
       if (onlyLive && d.live === false) return false;
       if (!k) return true;
       const name = (ipNames.get(d.ip) || "").toLowerCase();
       return d.ip.toLowerCase().includes(k) || (d.mac || "").toLowerCase().includes(k) || (d.iface || "").toLowerCase().includes(k) || name.includes(k);
     });
-  }, [data, kw, onlyLive, ipNames]);
+  }, [data, router, kw, onlyLive, ipNames]);
+  const deviceTotal = router?.login_ok ? router.router_count ?? data.count : data.count;
+  const onlineTotal = router?.login_ok ? router.router_online ?? data.live_count : data.live_count;
   const top5 = import_react.default.useMemo(() => {
     if (!router || !router.router_devices) return [];
     const list = [...router.router_devices].sort((a, b) => (b.rx_bytes ?? 0) - (a.rx_bytes ?? 0));
@@ -24613,13 +24630,13 @@ function Dashboard() {
       /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "kpis", children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "kpi", children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "k", children: "\u8BBE\u5907" }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "v", children: data.count }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "u", children: "\u53F0\u5728\u518C" })
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "v", children: deviceTotal }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "u", children: router?.login_ok ? "\u53F0\u5728\u518C(\u5168\u7F51)" : "\u53F0\u5728\u518C(\u672C\u673A)" })
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "kpi ok", children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "k", children: "\u5728\u7EBF" }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "v", children: data.live_count }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "u", children: "live=true" })
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "v", children: onlineTotal }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "u", children: router?.login_ok ? "live=true(\u5168\u7F51)" : "live=true(\u672C\u673A)" })
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "kpi", children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "k", children: "\u7F51\u5173" }),

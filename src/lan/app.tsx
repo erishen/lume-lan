@@ -47,7 +47,7 @@ function DeviceRow({ ip, mac, iface, source, live, gateway, name }: {
       <td>{name ? <span className="devname" title={name}>{name}</span> : <span className="dim">—</span>}</td>
       <td className="mono">{mac || <span className="dim">—</span>}</td>
       <td>{iface ? <span className="iface">{iface}</span> : <span className="dim">—</span>}</td>
-      <td><span className={"src src-" + (source || "arp")}>{source || "arp"}</span></td>
+      <td><span className={"src src-" + (source || "arp")}>{source === "router" ? "路由器" : source === "sweep" ? "Ping" : "ARP"}</span></td>
       <td>{on === "on" ? <span className="dot on" /> : <span className="dot off" />}{on === "on" ? "在线" : "离线"}</td>
     </tr>
   );
@@ -91,10 +91,27 @@ function Dashboard(): React.ReactElement {
     return m;
   }, [router]);
 
+  /* 合并列表:ARP 本机快照 + 路由器在线设备(不在 ARP 表里的补进来, source=router)。
+   * 这样「在线设备」不再受限于本机 arp 缓存,而是全网在线都可见。 */
   const shown = React.useMemo(() => {
     if (!data) return [];
+    const list = [...data.devices];
+    if (router?.login_ok && router.router_devices) {
+      const arpIps = new Set(list.map((d) => d.ip));
+      for (const rd of router.router_devices) {
+        if (!rd.online || !rd.ip || arpIps.has(rd.ip)) continue;
+        list.push({
+          ip: rd.ip,
+          mac: rd.mac || "",
+          live: true,
+          source: "router",
+          iface: "",
+          gateway: data.gateway ? rd.ip === data.gateway : undefined,
+        });
+      }
+    }
     const k = kw.trim().toLowerCase();
-    return data.devices.filter((d) => {
+    return list.filter((d) => {
       if (onlyLive && d.live === false) return false;
       if (!k) return true;
       const name = (ipNames.get(d.ip) || "").toLowerCase();
@@ -105,7 +122,12 @@ function Dashboard(): React.ReactElement {
         name.includes(k)
       );
     });
-  }, [data, kw, onlyLive, ipNames]);
+  }, [data, router, kw, onlyLive, ipNames]);
+
+  /* KPI:路由器登录态可用时以 HostInfo 的全网口径为准(32 台在册/8 台在线),
+   * 否则退回 ARP 本机口径。 */
+  const deviceTotal = router?.login_ok ? (router.router_count ?? data.count) : data.count;
+  const onlineTotal = router?.login_ok ? (router.router_online ?? data.live_count) : data.live_count;
 
   /* 路由器终端流量 Top 5(按累计下载排序,数据已按该序下发)。 */
   const top5 = React.useMemo(() => {
@@ -121,8 +143,8 @@ function Dashboard(): React.ReactElement {
       {data && !data.missing ? (
         <>
           <div className="kpis">
-            <div className="kpi"><div className="k">设备</div><div className="v">{data.count}</div><div className="u">台在册</div></div>
-            <div className="kpi ok"><div className="k">在线</div><div className="v">{data.live_count}</div><div className="u">live=true</div></div>
+            <div className="kpi"><div className="k">设备</div><div className="v">{deviceTotal}</div><div className="u">{router?.login_ok ? "台在册(全网)" : "台在册(本机)"}</div></div>
+            <div className="kpi ok"><div className="k">在线</div><div className="v">{onlineTotal}</div><div className="u">{router?.login_ok ? "live=true(全网)" : "live=true(本机)"}</div></div>
             <div className="kpi"><div className="k">网关</div><div className="v small">{data.gateway || "—"}</div><div className="u">{data.subnet}</div></div>
             <div className="kpi"><div className="k">快照</div><div className="v small">{fmtAge(data.scanned_at)}</div><div className="u">{data.sweep ? "含 ping sweep" : "仅 arp 表"}</div></div>
           </div>

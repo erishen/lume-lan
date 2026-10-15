@@ -24627,12 +24627,16 @@ function Dashboard() {
   }, [load]);
   const ipNames = import_react.default.useMemo(() => {
     const m = /* @__PURE__ */ new Map();
+    const aliases = router?.router_aliases || {};
     if (router?.router_devices) {
       for (const d of router.router_devices) {
         if (!d.ip) continue;
-        const label = d.hostname || d.vendor || "";
+        const label = aliases[d.ip] || d.hostname || d.vendor || "";
         if (label) m.set(d.ip, label);
       }
+    }
+    for (const [ip, name] of Object.entries(aliases)) {
+      if (name) m.set(ip, name);
     }
     return m;
   }, [router]);

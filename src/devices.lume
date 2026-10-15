@@ -8,6 +8,9 @@ let snap_path = ".data/devices.json";
 // 路由器后台抓取的快照(宿主 scripts/router_fetch.py → .data/router.json)。
 // 缺文件/损坏 → null,前端据此隐藏「路由器」区(优雅降级,不影响 arp 快照)。
 let router_path = ".data/router.json";
+// 本地设备命名层(.data/aliases.json):{ip: 名字}。对「路由器没给好名字 / 想在
+// 本地覆盖」的设备显示本地别名(最高优先级, 不依赖路由器登录态)。缺文件 → 空表。
+let aliases_path = ".data/aliases.json";
 // 快照「过期」阈值(秒):超过就提示前端重新 make scan。可经 env 覆盖。
 let stale_secs = env("LAN_STALE_SECS");
 if (stale_secs == null) { stale_secs = "300"; }
@@ -18,6 +21,16 @@ func load_snapshot() {
   if (txt == null) { return null; }
   let r = try(() => json(txt));
   if (r.err != null) { return null; }
+  return r.ok;
+}
+
+// 读本地命名层({ip: 名字});缺失/损坏 → 空表(不报错)。
+func load_aliases() {
+  let txt = read_file(aliases_path);
+  if (txt == null) { return {}; }
+  let r = try(() => json(txt));
+  if (r.err != null) { return {}; }
+  if (r.ok == null) { return {}; }
   return r.ok;
 }
 
@@ -127,5 +140,8 @@ export func router_payload() {
     router_online: online_count,
     router_active: int(get(ro, "router_active", 0)),
     router_traffic_total: get(ro, "router_traffic_total", []),
+    // 本地命名层(.data/aliases.json): {ip: 名字}。前端显示时优先级最高,
+    // 覆盖路由器备注(ActualName)与设备自报(HostName), 且不依赖登录态。
+    router_aliases: load_aliases(),
   };
 }

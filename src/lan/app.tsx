@@ -129,16 +129,22 @@ function Dashboard(): React.ReactElement {
     void load();
   }, [load]);
 
-  /* IP → 路由器已知的设备名/厂商（HostName 优先，没有则用 DevBrands）。
-   * 必须先于 shown 声明,shown 的过滤要按名字搜。 */
+  /* IP → 显示名。优先级: 本地别名(.data/aliases.json, 最高, 不依赖登录态)
+   * > 路由器备注/设备名(hostname 由宿主 extract 时已按 ActualName>HostName 取过)
+   * > 厂商(vendor)。本地别名让你在路由器没改好名/登录态拉不到时也能自定义。 */
   const ipNames = React.useMemo(() => {
     const m = new Map<string, string>();
+    const aliases = router?.router_aliases || {};
     if (router?.router_devices) {
       for (const d of router.router_devices) {
         if (!d.ip) continue;
-        const label = d.hostname || d.vendor || "";
+        const label = aliases[d.ip] || d.hostname || d.vendor || "";
         if (label) m.set(d.ip, label);
       }
+    }
+    /* 本地别名即使设备不在当前终端列表里也要能显示(如刚改名尚未下发) */
+    for (const [ip, name] of Object.entries(aliases)) {
+      if (name) m.set(ip, name);
     }
     return m;
   }, [router]);

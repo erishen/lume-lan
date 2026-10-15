@@ -89,6 +89,8 @@ export interface RouterPayload {
   router_active?: number;
   /** 家庭总流量序列(全设备 rx+tx 累计求和, 每 60s 一个点), 用于趋势曲线。 */
   router_traffic_total?: TrafficPoint[];
+  /** 本地命名层(.data/aliases.json): {ip: 名字}。显示时优先级高于路由器备注。 */
+  router_aliases?: Record<string, string>;
 }
 
 export async function apiGet<T>(url: string): Promise<T> {

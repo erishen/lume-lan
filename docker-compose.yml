@@ -21,8 +21,10 @@ services:
     image: lume-lan
     container_name: lume-lan
     restart: unless-stopped
+    # 宿主侧发布端口走 DOCKER_PORT(默认 10091, >10000, 避开本地 make dev 的 8091);
+    # 容器内 Lume 仍绑 8091。覆盖: make dc DOCKER_PORT=11091 或 export DOCKER_PORT。
     ports:
-      - "8091:8091"
+      - "${DOCKER_PORT:-10091}:8091"
     environment:
       # serve 侧
       LUME_BIND: "0.0.0.0"

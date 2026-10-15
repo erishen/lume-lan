@@ -25,6 +25,13 @@
 
 LUME      ?= $(HOME)/.local/bin/lume
 PORT      ?= 8091
+# docker 容器在宿主的发布端口(>10000, 避开本地 make dev 的 8091); 容器内 Lume 仍绑 8091。
+DOCKER_PORT ?= 10091
+# 镜像名 / Lume 版本(与 Dockerfile 的 ARG 一致)。
+DOCKER_IMAGE ?= lume-lan
+LUME_VERSION ?= v0.6.3
+# 路由器地址默认值(docker 目标注入容器; 覆盖: make dc ROUTER_HOST=...)。
+ROUTER_HOST  ?= 192.168.3.1
 PY        ?= /usr/bin/python3
 
 ESBUILD   := $(shell command -v esbuild 2>/dev/null || echo ../lume/frontend/node_modules/.bin/esbuild)
@@ -90,4 +97,50 @@ lan: dev
 # lan-dev 原为「watch 版 dev」,现已并入 make dev(热更是默认行为),此处仅作别名。
 lan-dev: dev
 
-.PHONY: default dev lan lan-dev stop scan scan-sweep check ui watch router-fetch
+# ---- Docker 目标(容器内跑 Lume serve + 读 .data/ 快照; 宿主发布端口 >10000 避开本地 8091) ----
+# 容器内 Lume 固定绑 8091; 宿主侧映射 DOCKER_PORT(默认 10091)。arp 快照靠宿主 make scan
+# 写进 .data/, 容器挂载读取; 可选 REFRESH=1 让容器内每 60s 自刷路由器(打 ROUTER_HOST)。
+# 凭据: docker run/compose 时注入 ROUTER_PASS(不进镜像)。
+
+# 打镜像(自动按本机 arch 取对应 static 二进制)。多架构: 见下方 docker-build-multiarch。
+docker-build:
+	@echo "▶ 打镜像 $(DOCKER_IMAGE)(LUME_VERSION=$(LUME_VERSION))…"
+	@docker build --build-arg LUME_VERSION=$(LUME_VERSION) -t $(DOCKER_IMAGE) .
+
+# 多架构镜像(amd64+arm64)。需先 docker buildx create --use(或已用默认 builder)。
+docker-build-multiarch:
+	@docker buildx build --platform linux/arm64,linux/amd64 \
+		--build-arg LUME_VERSION=$(LUME_VERSION) -t $(DOCKER_IMAGE) .
+
+# 前台起容器(宿主 http://127.0.0.1:$(DOCKER_PORT))。Ctrl-C 停。先宿主出 .data/。
+# 传 ROUTER_PASS 才注入凭据(make 变量展开, 不进镜像): make dc ROUTER_PASS='...'
+dc: scan router-fetch
+	@echo "▶ http://127.0.0.1:$(DOCKER_PORT)/  (宿主:$(DOCKER_PORT) → 容器:8091; .data/ 已挂载)"
+	@if [ -n "$(ROUTER_PASS)" ]; then \
+		docker run --rm -p $(DOCKER_PORT):8091 -v $$(pwd)/.data:/app/.data \
+			-e ROUTER_PASS="$(ROUTER_PASS)" -e ROUTER_HOST="$(ROUTER_HOST)" $(DOCKER_IMAGE); \
+	else \
+		docker run --rm -p $(DOCKER_PORT):8091 -v $$(pwd)/.data:/app/.data \
+			-e ROUTER_HOST="$(ROUTER_HOST)" $(DOCKER_IMAGE); \
+	fi
+
+# 后台起 / 停。用固定容器名, 便于 make stop-docker 清理。
+dc-up:
+	@echo "▶ 后台起 $(DOCKER_IMAGE) → http://127.0.0.1:$(DOCKER_PORT)/"
+	@docker rm -f lan-lan 2>/dev/null || true
+	@docker run -d --name lan-lan -p $(DOCKER_PORT):8091 -v $$(pwd)/.data:/app/.data \
+		-e ROUTER_HOST="$(ROUTER_HOST)" $(DOCKER_IMAGE)
+
+dc-down:
+	@docker stop lan-lan 2>/dev/null && docker rm lan-lan 2>/dev/null || true
+	@echo "已停并删除容器 lan-lan"
+
+# compose 方式(等价于 dc-up, 走 docker-compose.yml)。DOCKER_PORT 经 env 传入。
+docker-compose:
+	@DOCKER_PORT=$(DOCKER_PORT) docker compose up -d
+
+docker-compose-down:
+	@docker compose down
+
+.PHONY: default dev lan lan-dev stop scan scan-sweep check ui watch router-fetch \
+         docker-build docker-build-multiarch dc dc-up dc-down docker-compose docker-compose-down

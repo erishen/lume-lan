@@ -24564,9 +24564,11 @@ function DeviceRow({ ip, mac, iface, source, live, gateway, name }) {
     ] })
   ] });
 }
-function TrafficChart({ rows, max }) {
+function TrafficChart({ rows, max, peakIdx, peak }) {
   const spanMin = Math.round((rows[rows.length - 1].ts - rows[0].ts) / 60);
   const sumDelta = rows.reduce((a, r) => a + r.delta, 0);
+  const peakTime = new Date(peak.ts * 1e3).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" });
+  const peakCause = peak.top_name || peak.top_ip;
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "trend", children: [
     /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "trend-title", children: [
       "\u5BB6\u5EAD\u6D41\u91CF\u8D8B\u52BF\uFF08\u8FD1 ",
@@ -24575,18 +24577,27 @@ function TrafficChart({ rows, max }) {
       fmtBytes(sumDelta),
       "\uFF09"
     ] }),
+    peak.delta > 0 && peakCause ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "trend-peak", children: [
+      "\u{1F4C8} \u5CF0\u503C ",
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: peakTime }),
+      "\uFF08",
+      fmtBytes(peak.delta),
+      "/\u5468\u671F\uFF09\xB7 \u4E3B\u56E0 ",
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: peakCause }),
+      peak.top_ip ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "trend-peak-ip mono", children: peak.top_ip }) : null
+    ] }) : null,
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "trend-bars", children: rows.map((r, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
       "div",
       {
-        className: "trendbar" + (r.delta > 0 ? "" : " zero"),
-        title: `${new Date(r.ts * 1e3).toLocaleTimeString("zh-CN", { hour12: false })} \xB7 ${fmtBytes(r.delta)}`,
+        className: "trendbar" + (i === peakIdx ? " peak" : "") + (r.delta > 0 ? "" : " zero"),
+        title: `${new Date(r.ts * 1e3).toLocaleTimeString("zh-CN", { hour12: false })} \xB7 ${fmtBytes(r.delta)}${i === peakIdx && r.top_name ? " \xB7 \u4E3B\u56E0 " + r.top_name : ""}`,
         style: { height: Math.max(2, Math.round(r.delta / max * 100)) + "%" }
       },
       i
     )) }),
     /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "trend-axis", children: [
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: new Date(rows[0].ts * 1e3).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" }) }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "\u67F1 = \u8BE5\u5468\u671F\u5168\u5BB6\u5EAD\u6D41\u91CF\uFF08\u2191\u2193 \u5408\u8BA1\uFF09\uFF0C\u9AD8\u67F1 = \u6709\u4EBA\u5728\u5927\u91CF\u4F20\u6570\u636E" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "\u67F1 = \u8BE5\u5468\u671F\u5168\u5BB6\u5EAD\u6D41\u91CF\uFF08\u2191\u2193 \u5408\u8BA1\uFF09" }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: new Date(rows[rows.length - 1].ts * 1e3).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" }) })
     ] })
   ] });
@@ -24685,12 +24696,22 @@ function Dashboard() {
     if (!s || s.length < 2) return null;
     const pts = s.slice(-180);
     let max = 1;
+    let peakIdx = 0;
     const rows = pts.map((p, i) => {
       const delta = i === 0 ? 0 : Math.max(0, p.rx - pts[i - 1].rx + p.tx - pts[i - 1].tx);
-      if (delta > max) max = delta;
-      return { ts: p.ts, delta };
+      if (delta > max) {
+        max = delta;
+        peakIdx = i;
+      }
+      return {
+        ts: p.ts,
+        delta,
+        top_name: p.top_name || "",
+        top_ip: p.top_ip || ""
+      };
     });
-    return { rows, max };
+    const peak = rows[peakIdx];
+    return { rows, max, peakIdx, peak };
   }, [router]);
   const [showAll, setShowAll] = import_react.default.useState(false);
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dash", children: [
@@ -24742,7 +24763,7 @@ function Dashboard() {
           router.login_stale_note || "\u672C\u6B21\u767B\u5F55\u5931\u8D25/\u51B7\u5374\u4E2D\uFF0C\u4EE5\u4E0B\u6CBF\u7528\u4E0A\u6B21\u7684\u7EC8\u7AEF\u6570\u636E",
           "\uFF08\u81EA\u52A8\u5FAA\u73AF\u7A0D\u540E\u91CD\u8BD5\uFF0C\u65E0\u9700\u64CD\u4F5C\uFF09"
         ] }) : null,
-        trafficTrend ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TrafficChart, { rows: trafficTrend.rows, max: trafficTrend.max }) : null,
+        trafficTrend ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TrafficChart, { rows: trafficTrend.rows, max: trafficTrend.max, peakIdx: trafficTrend.peakIdx, peak: trafficTrend.peak }) : null,
         typeDist.length > 0 || freqDist.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrdist", children: [
           typeDist.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrdist-row", children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdist-label", children: "\u8BBE\u5907\u7C7B\u578B" }),

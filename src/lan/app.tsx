@@ -63,28 +63,40 @@ function DeviceRow({ ip, mac, iface, source, live, gateway, name }: {
 }
 
 /* 家庭总流量趋势:纯 div 柱状图(每根柱 = 一个 60s 刷新周期的全家庭流量增量)。
- * 数据来自 router_traffic_total 累计序列的前端差分;历史 <2 点不显示。 */
-function TrafficChart({ rows, max }: { rows: { ts: number; delta: number }[]; max: number }): React.ReactElement {
+ * 数据来自 router_traffic_total 累计序列的前端差分;历史 <2 点不显示。
+ * 峰值柱高亮,并标注「峰值时刻 + 主因设备」(谁在吃带宽)。 */
+function TrafficChart({ rows, max, peakIdx, peak }: {
+  rows: { ts: number; delta: number; top_name?: string; top_ip?: string }[];
+  max: number; peakIdx: number; peak: { ts: number; delta: number; top_name?: string; top_ip?: string };
+}): React.ReactElement {
   const spanMin = Math.round((rows[rows.length - 1].ts - rows[0].ts) / 60);
   const sumDelta = rows.reduce((a, r) => a + r.delta, 0);
+  const peakTime = new Date(peak.ts * 1000).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" });
+  const peakCause = peak.top_name || peak.top_ip;
   return (
     <div className="trend">
       <div className="trend-title">
         家庭流量趋势（近 {spanMin} 分钟，每 60s 采样 · 合计 {fmtBytes(sumDelta)}）
       </div>
+      {peak.delta > 0 && peakCause ? (
+        <div className="trend-peak">
+          📈 峰值 <b>{peakTime}</b>（{fmtBytes(peak.delta)}/周期）· 主因 <b>{peakCause}</b>
+          {peak.top_ip ? <span className="trend-peak-ip mono">{peak.top_ip}</span> : null}
+        </div>
+      ) : null}
       <div className="trend-bars">
         {rows.map((r, i) => (
           <div
             key={i}
-            className={"trendbar" + (r.delta > 0 ? "" : " zero")}
-            title={`${new Date(r.ts * 1000).toLocaleTimeString("zh-CN", { hour12: false })} · ${fmtBytes(r.delta)}`}
+            className={"trendbar" + (i === peakIdx ? " peak" : "") + (r.delta > 0 ? "" : " zero")}
+            title={`${new Date(r.ts * 1000).toLocaleTimeString("zh-CN", { hour12: false })} · ${fmtBytes(r.delta)}${i === peakIdx && r.top_name ? " · 主因 " + r.top_name : ""}`}
             style={{ height: Math.max(2, Math.round((r.delta / max) * 100)) + "%" }}
           />
         ))}
       </div>
       <div className="trend-axis">
         <span>{new Date(rows[0].ts * 1000).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" })}</span>
-        <span>柱 = 该周期全家庭流量（↑↓ 合计），高柱 = 有人在大量传数据</span>
+        <span>柱 = 该周期全家庭流量（↑↓ 合计）</span>
         <span>{new Date(rows[rows.length - 1].ts * 1000).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" })}</span>
       </div>
     </div>
@@ -203,18 +215,23 @@ function Dashboard(): React.ReactElement {
   }, [router]);
 
   /* 家庭总流量趋势:router_traffic_total 是累计值序列,相邻点差值 = 该刷新周期的流量。
-   * 取最近 180 点(60s 循环 ≈ 3 小时)。 */
+   * 取最近 180 点(60s 循环 ≈ 3 小时)。每点带主因设备(宿主算好的 top_* 字段)。 */
   const trafficTrend = React.useMemo(() => {
     const s = router?.router_traffic_total;
     if (!s || s.length < 2) return null;
     const pts = s.slice(-180);
     let max = 1;
+    let peakIdx = 0;
     const rows = pts.map((p, i) => {
       const delta = i === 0 ? 0 : Math.max(0, p.rx - pts[i - 1].rx + p.tx - pts[i - 1].tx);
-      if (delta > max) max = delta;
-      return { ts: p.ts, delta };
+      if (delta > max) { max = delta; peakIdx = i; }
+      return {
+        ts: p.ts, delta,
+        top_name: p.top_name || "", top_ip: p.top_ip || "",
+      };
     });
-    return { rows, max };
+    const peak = rows[peakIdx];
+    return { rows, max, peakIdx, peak };
   }, [router]);
   const [showAll, setShowAll] = React.useState(false);
 
@@ -243,7 +260,7 @@ function Dashboard(): React.ReactElement {
                   ⏳ {router.login_stale_note || "本次登录失败/冷却中，以下沿用上次的终端数据"}（自动循环稍后重试，无需操作）
                 </div>
               ) : null}
-              {trafficTrend ? <TrafficChart rows={trafficTrend.rows} max={trafficTrend.max} /> : null}
+              {trafficTrend ? <TrafficChart rows={trafficTrend.rows} max={trafficTrend.max} peakIdx={trafficTrend.peakIdx} peak={trafficTrend.peak} /> : null}
               {(typeDist.length > 0 || freqDist.length > 0) ? (
                 <div className="rtrdist">
                   {typeDist.length > 0 ? (

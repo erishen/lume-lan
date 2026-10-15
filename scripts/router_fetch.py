@@ -259,7 +259,16 @@ def record_total_traffic(devices: list, fetched_at: int) -> list:
         hist = []
     total_rx = sum(d.get("rx_bytes") or 0 for d in devices)
     total_tx = sum(d.get("tx_bytes") or 0 for d in devices)
-    hist.append({"ts": fetched_at, "rx": total_rx, "tx": total_tx})
+    # 本周期主因设备: delta_cycle(距上一点增量)最大者, 供前端峰值柱标注「谁在吃带宽」。
+    top_ip, top_name, top_delta = "", "", 0
+    for d in devices:
+        dc = d.get("delta_cycle") or 0
+        if dc > top_delta:
+            top_delta = dc
+            top_ip = str(d.get("ip") or "")
+            top_name = str(d.get("hostname") or d.get("vendor") or "")
+    hist.append({"ts": fetched_at, "rx": total_rx, "tx": total_tx,
+                 "top_ip": top_ip, "top_name": top_name, "top_delta": top_delta})
     while len(hist) > HIST_CAP:
         hist.pop(0)
     tmp = HIST_TOTAL + ".tmp"
@@ -309,6 +318,11 @@ def apply_traffic_deltas(devices: list, fetched_at: int) -> None:
                 b = base[-1]
                 d["delta_1h"] = max(0, cur_rx - b.get("rx", 0)) + max(0, cur_tx - b.get("tx", 0))
         if ip:
+            prev = series[-1] if series else None
+            d["delta_cycle"] = 0
+            if prev:
+                # 本周期(距上一点, ~60s)增量, 供总流量点标注「主因设备」
+                d["delta_cycle"] = max(0, cur_rx - prev.get("rx", 0)) + max(0, cur_tx - prev.get("tx", 0))
             series.append({"ts": fetched_at, "rx": cur_rx, "tx": cur_tx})
             while len(series) > HIST_CAP:
                 series.pop(0)

@@ -59,6 +59,12 @@ export interface TrafficPoint {
   ts: number;
   rx: number;
   tx: number;
+  /** 本周期流量增量最大的设备 IP(主因, 可能是空串)。 */
+  top_ip?: string;
+  /** 主因设备名(备注/厂商), 供峰值柱标注。 */
+  top_name?: string;
+  /** 主因设备本周期增量(字节)。 */
+  top_delta?: number;
 }
 
 export interface RouterPayload {

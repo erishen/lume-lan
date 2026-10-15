@@ -189,6 +189,10 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .trend-bars { display: flex; align-items: flex-end; gap: 2px; height: 96px; padding: 4px; background: rgba(120, 130, 150, 0.06); border-radius: 8px; overflow: hidden; }
 .trendbar { flex: 1; min-width: 2px; height: 100%; background: linear-gradient(180deg, #60a5fa, var(--accent)); border-radius: 2px 2px 0 0; transition: height .3s; }
 .trendbar.zero { background: rgba(120, 130, 150, 0.25); }
+.trendbar.peak { background: linear-gradient(180deg, #fb7185, var(--warn)); }
+.trend-peak { font-size: 0.8rem; color: #92400e; background: rgba(217, 119, 6, 0.1); border: 1px solid rgba(217, 119, 6, 0.25); border-radius: 8px; padding: 6px 10px; margin-bottom: 8px; line-height: 1.5; }
+.trend-peak b { color: #7c2d12; }
+.trend-peak-ip { font-size: 0.75rem; color: var(--muted); margin-left: 6px; }
 .trend-axis { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 0.72rem; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .trend-axis span:nth-child(2) { font-family: inherit; }
 

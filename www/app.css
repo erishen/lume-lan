@@ -110,6 +110,8 @@ table.devs th { font-size: 0.8rem; color: var(--muted); text-transform: uppercas
 table.devs tbody tr:last-child td { border-bottom: none; }
 table.devs td.ip { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; }
 table.devs td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }
+table.devs td .devname { font-weight: 500; color: var(--fg); }
+table.devs td .devname::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 2px; background: var(--accent); margin-right: 6px; vertical-align: middle; }
 .dim { color: var(--muted); }
 .tag { display: inline-block; margin-left: 6px; font-size: 0.7rem; padding: 0 5px; border-radius: 5px; }
 .tag.gw { background: rgba(37, 99, 235, 0.15); color: var(--accent); }

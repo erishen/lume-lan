@@ -24542,19 +24542,20 @@ function navigate(href) {
   window.history.pushState(null, "", url.pathname + url.search);
   window.dispatchEvent(new Event("lan:navigate"));
 }
-function DeviceRow({ ip, mac, iface, source, live, gateway }) {
+function DeviceRow({ ip, mac, iface, source, live, gateway, name }) {
   const on = live === false ? "off" : "on";
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { className: "row-" + on, children: [
     /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("td", { className: "ip", children: [
       ip,
       gateway ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "tag gw", children: "\u7F51\u5173" }) : null
     ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: name ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "devname", title: name, children: name }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dim", children: "\u2014" }) }),
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { className: "mono", children: mac || /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dim", children: "\u2014" }) }),
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: iface ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "iface", children: iface }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dim", children: "\u2014" }) }),
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "src src-" + (source || "arp"), children: source || "arp" }) }),
     /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("td", { children: [
       on === "on" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dot on" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dot off" }),
-      on === "on" ? "\u5728\u7EBF" : "\u79BB\u7DDA"
+      on === "on" ? "\u5728\u7EBF" : "\u79BB\u7EBF"
     ] })
   ] });
 }
@@ -24579,15 +24580,27 @@ function Dashboard() {
   import_react.default.useEffect(() => {
     void load();
   }, [load]);
+  const ipNames = import_react.default.useMemo(() => {
+    const m = /* @__PURE__ */ new Map();
+    if (router?.router_devices) {
+      for (const d of router.router_devices) {
+        if (!d.ip) continue;
+        const label = d.hostname || d.vendor || "";
+        if (label) m.set(d.ip, label);
+      }
+    }
+    return m;
+  }, [router]);
   const shown = import_react.default.useMemo(() => {
     if (!data) return [];
     const k = kw.trim().toLowerCase();
     return data.devices.filter((d) => {
       if (onlyLive && d.live === false) return false;
       if (!k) return true;
-      return d.ip.toLowerCase().includes(k) || (d.mac || "").toLowerCase().includes(k) || (d.iface || "").toLowerCase().includes(k);
+      const name = (ipNames.get(d.ip) || "").toLowerCase();
+      return d.ip.toLowerCase().includes(k) || (d.mac || "").toLowerCase().includes(k) || (d.iface || "").toLowerCase().includes(k) || name.includes(k);
     });
-  }, [data, kw, onlyLive]);
+  }, [data, kw, onlyLive, ipNames]);
   const top5 = import_react.default.useMemo(() => {
     if (!router || !router.router_devices) return [];
     const list = [...router.router_devices].sort((a, b) => (b.rx_bytes ?? 0) - (a.rx_bytes ?? 0));
@@ -24659,7 +24672,7 @@ function Dashboard() {
             ] })
           ] }, item.d.ip + item.d.mac))
         ] }) : null,
-        router.login_ok ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrdevs", children: [
+        router.router_devices && router.router_devices.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrdevs", children: [
           router.router_devices && router.router_devices.length > 5 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "rtrdevs-toggle", onClick: () => setShowAll(!showAll), children: showAll ? "\u6536\u8D77\u5B8C\u6574\u5217\u8868" : `\u5C55\u5F00\u5168\u90E8 ${router.router_count} \u53F0\u7EC8\u7AEF` }) : null,
           (showAll ? router.router_devices : router.router_devices?.slice(0, 5) ?? []).map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrdev" + (d.online ? "" : " off"), children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-ip mono", children: d.ip }),
@@ -24694,7 +24707,7 @@ function Dashboard() {
           {
             value: kw,
             onChange: (e) => setKw(e.target.value),
-            placeholder: "\u641C IP / MAC / \u7F51\u5361\u2026"
+            placeholder: "\u641C IP / \u8BBE\u5907\u540D / MAC / \u7F51\u5361\u2026"
           }
         ),
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { className: "chk", children: [
@@ -24714,14 +24727,15 @@ function Dashboard() {
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "tablewrap", children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("table", { className: "devs", children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: "IP" }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: "\u8BBE\u5907\u540D" }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: "MAC" }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: "\u7F51\u5361" }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: "\u6765\u6E90" }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: "\u72B6\u6001" })
         ] }) }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tbody", { children: [
-          shown.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DeviceRow, { ip: d.ip, mac: d.mac, iface: d.iface, source: d.source, live: d.live, gateway: d.gateway }, d.ip)),
-          shown.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tr", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { colSpan: 5, className: "empty", children: "\u65E0\u5339\u914D\u8BBE\u5907" }) })
+          shown.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DeviceRow, { ip: d.ip, mac: d.mac, iface: d.iface, source: d.source, live: d.live, gateway: d.gateway, name: ipNames.get(d.ip) }, d.ip)),
+          shown.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tr", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { colSpan: 6, className: "empty", children: "\u65E0\u5339\u914D\u8BBE\u5907" }) })
         ] })
       ] }) })
     ] }) : data && data.missing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "empty-box", children: [

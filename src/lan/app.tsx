@@ -36,18 +36,19 @@ function navigate(href: string): void {
   window.dispatchEvent(new Event("lan:navigate"));
 }
 
-/* 设备行:IP / MAC / 网卡 / 来源 / 在线态。 */
-function DeviceRow({ ip, mac, iface, source, live, gateway }: {
-  ip: string; mac: string; iface?: string; source?: string; live?: boolean; gateway?: boolean;
+/* 设备行:IP / 设备名(路由器 HostName/厂商,按 IP 关联) / MAC / 网卡 / 来源 / 在线态。 */
+function DeviceRow({ ip, mac, iface, source, live, gateway, name }: {
+  ip: string; mac: string; iface?: string; source?: string; live?: boolean; gateway?: boolean; name?: string;
 }): React.ReactElement {
   const on = live === false ? "off" : "on";
   return (
     <tr className={"row-" + on}>
       <td className="ip">{ip}{gateway ? <span className="tag gw">网关</span> : null}</td>
+      <td>{name ? <span className="devname" title={name}>{name}</span> : <span className="dim">—</span>}</td>
       <td className="mono">{mac || <span className="dim">—</span>}</td>
       <td>{iface ? <span className="iface">{iface}</span> : <span className="dim">—</span>}</td>
       <td><span className={"src src-" + (source || "arp")}>{source || "arp"}</span></td>
-      <td>{on === "on" ? <span className="dot on" /> : <span className="dot off" />}{on === "on" ? "在线" : "离線"}</td>
+      <td>{on === "on" ? <span className="dot on" /> : <span className="dot off" />}{on === "on" ? "在线" : "离线"}</td>
     </tr>
   );
 }
@@ -76,19 +77,35 @@ function Dashboard(): React.ReactElement {
     void load();
   }, [load]);
 
+  /* IP → 路由器已知的设备名/厂商（HostName 优先，没有则用 DevBrands）。
+   * 必须先于 shown 声明,shown 的过滤要按名字搜。 */
+  const ipNames = React.useMemo(() => {
+    const m = new Map<string, string>();
+    if (router?.router_devices) {
+      for (const d of router.router_devices) {
+        if (!d.ip) continue;
+        const label = d.hostname || d.vendor || "";
+        if (label) m.set(d.ip, label);
+      }
+    }
+    return m;
+  }, [router]);
+
   const shown = React.useMemo(() => {
     if (!data) return [];
     const k = kw.trim().toLowerCase();
     return data.devices.filter((d) => {
       if (onlyLive && d.live === false) return false;
       if (!k) return true;
+      const name = (ipNames.get(d.ip) || "").toLowerCase();
       return (
         d.ip.toLowerCase().includes(k) ||
         (d.mac || "").toLowerCase().includes(k) ||
-        (d.iface || "").toLowerCase().includes(k)
+        (d.iface || "").toLowerCase().includes(k) ||
+        name.includes(k)
       );
     });
-  }, [data, kw, onlyLive]);
+  }, [data, kw, onlyLive, ipNames]);
 
   /* 路由器终端流量 Top 5(按累计下载排序,数据已按该序下发)。 */
   const top5 = React.useMemo(() => {
@@ -135,7 +152,7 @@ function Dashboard(): React.ReactElement {
                   ))}
                 </div>
               ) : null}
-              {router.login_ok ? (
+              {router.router_devices && router.router_devices.length > 0 ? (
                 <div className="rtrdevs">
                   {router.router_devices && router.router_devices.length > 5 ? (
                     <button className="rtrdevs-toggle" onClick={() => setShowAll(!showAll)}>
@@ -170,7 +187,7 @@ function Dashboard(): React.ReactElement {
             <input
               value={kw}
               onChange={(e) => setKw(e.target.value)}
-              placeholder="搜 IP / MAC / 网卡…"
+              placeholder="搜 IP / 设备名 / MAC / 网卡…"
             />
             <label className="chk"><input type="checkbox" checked={onlyLive} onChange={(e) => setOnlyLive(e.target.checked)} />只看在线</label>
             <span className="spacer" />
@@ -179,12 +196,12 @@ function Dashboard(): React.ReactElement {
           </div>
           <div className="tablewrap">
             <table className="devs">
-              <thead><tr><th>IP</th><th>MAC</th><th>网卡</th><th>来源</th><th>状态</th></tr></thead>
+              <thead><tr><th>IP</th><th>设备名</th><th>MAC</th><th>网卡</th><th>来源</th><th>状态</th></tr></thead>
               <tbody>
                 {shown.map((d) => (
-                  <DeviceRow key={d.ip} ip={d.ip} mac={d.mac} iface={d.iface} source={d.source} live={d.live} gateway={d.gateway} />
+                  <DeviceRow key={d.ip} ip={d.ip} mac={d.mac} iface={d.iface} source={d.source} live={d.live} gateway={d.gateway} name={ipNames.get(d.ip)} />
                 ))}
-                {shown.length === 0 && <tr><td colSpan={5} className="empty">无匹配设备</td></tr>}
+                {shown.length === 0 && <tr><td colSpan={6} className="empty">无匹配设备</td></tr>}
               </tbody>
             </table>
           </div>

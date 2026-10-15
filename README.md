@@ -68,10 +68,10 @@ make ui            # 一次性构建前端（esbuild → www/app.js，非 watch�
 **路由器后台**（你的网关是华为 WS5102，HiLink/CAT 协议，`http://192.168.3.1/`）：
 
 - **免密（始终可用）**：`/api/system/deviceinfo` → 型号 / 序列号 / 厂商，界面「路由器」区直接显示。
-- **登录态（需密码）**：终端列表 + 每设备流量。HiLink 私有端点名不规律、请求体经
-  `cat_enc.js` 加密，curl 直接猜不中。用法：`cp .env.example .env`，填 `ROUTER_PASS`；
-  在浏览器登录后台看 Network 里「终端管理 / 流量」的真实请求，把端点填进
-  `ROUTER_TERMINAL_API`（形如 `api/dhcp/dhcpclinet`），再 `make router-fetch`。
+- **登录态（需密码）**：终端列表 + 每设备流量 + 在线状态 + 最后活跃时间。
+  `router_fetch.py` 自动完成 CAT 登录（SHA256 简单路径，独立于网页 SCRAM 的限流计数），
+  然后读 `/api/system/HostInfo` 拉全部 DHCP 记录。
+  用法：`cp .env.example .env`，填 `ROUTER_PASS`，再 `make router-fetch` 即可。
   取不到就优雅降级——不影响 arp 快照，界面只多一行提示。
 
 ## 安全

@@ -36,11 +36,16 @@ export interface RouterDevice {
   ip: string;
   mac: string;
   hostname?: string;
+  vendor?: string;
   rx_bytes?: number;
   tx_bytes?: number;
+  up_rate?: number;
+  down_rate?: number;
   rssi?: number | null;
   online?: boolean;
   wired?: boolean | null;
+  guest?: boolean;
+  last_seen?: string;
 }
 
 export interface RouterPayload {
@@ -53,9 +58,12 @@ export interface RouterPayload {
   manufacturer_oui?: string;
   router_ok?: boolean;
   terminal_source?: string;
+  login_ok?: boolean;
+  login_error?: string;
   fetched_at?: number;
   router_devices?: RouterDevice[];
   router_count?: number;
+  router_online?: number;
 }
 
 export async function apiGet<T>(url: string): Promise<T> {

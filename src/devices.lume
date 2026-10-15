@@ -99,6 +99,13 @@ export func router_payload() {
   let ro = r.ok;
   let router = get(ro, "router", {});
   let rdevs = get(ro, "router_devices", []);
+  let login = get(ro, "login", {});
+  let online_count = 0;
+  for (d in rdevs) {
+    if (get(d, "online", false) == true) {
+      online_count = online_count + 1;
+    }
+  }
   return {
     available: true,
     host: get(router, "host", ""),
@@ -108,8 +115,11 @@ export func router_payload() {
     manufacturer_oui: get(router, "manufacturer_oui", ""),
     router_ok: get(router, "ok", false),
     terminal_source: get(ro, "terminal_source", ""),
+    login_ok: get(login, "ok", false),
+    login_error: get(login, "error", ""),
     fetched_at: int(get(router, "fetched_at", 0)),
     router_devices: rdevs,
     router_count: len(rdevs),
+    router_online: online_count,
   };
 }

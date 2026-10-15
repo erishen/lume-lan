@@ -149,6 +149,40 @@ table.devs td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace
 .routernote { margin-top: 10px; font-size: 0.85rem; color: var(--muted); background: rgba(217, 119, 6, 0.08); border-radius: 8px; padding: 10px 12px; line-height: 1.6; }
 .routernote.dim { background: none; padding: 0; }
 
+/* 流量 Top 5 条形图 */
+.rtrtop { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; }
+.rtrtop-title { font-size: 0.85rem; font-weight: 600; margin-bottom: 8px; color: var(--fg); }
+.rtrtop-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 0.88rem; }
+.rtrtop-rank {
+  width: 20px; height: 20px; flex: 0 0 20px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 0.75rem; font-weight: 700; background: rgba(120, 130, 150, 0.14); color: var(--muted);
+}
+.rtrtop-rank.top { background: var(--warn); color: #fff; }
+.rtrtop-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.rtrtop-ip { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; color: var(--muted); }
+.rtrtop-vendor { font-size: 0.72rem; padding: 1px 6px; border-radius: 5px; background: rgba(37, 99, 235, 0.12); color: var(--accent); }
+.rtrtop-live { font-size: 0.72rem; color: var(--ok); }
+.rtrtop-bar { flex: 0 0 90px; height: 8px; border-radius: 4px; background: rgba(120, 130, 150, 0.15); overflow: hidden; }
+.rtrtop-bar > div { height: 100%; background: linear-gradient(90deg, var(--accent), #60a5fa); border-radius: 4px; }
+.rtrtop-net { flex: 0 0 auto; font-size: 0.78rem; color: var(--muted); white-space: nowrap; min-width: 120px; text-align: right; }
+
+/* 完整终端列表：开关 + 行内字段 + 在线点 */
+.rtrdevs-toggle {
+  cursor: pointer; font: inherit; font-size: 0.82rem; color: var(--accent);
+  background: none; border: 1px dashed var(--line); border-radius: 8px; padding: 5px 12px; margin: 8px 0;
+}
+.rtrdev { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 0.9rem; }
+.rtrdev.off { opacity: 0.55; }
+.rtrdev-ip { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; min-width: 128px; }
+.rtrdev-host { flex: 1; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rtrdev-vendor { flex: 0 0 auto; font-size: 0.72rem; padding: 1px 6px; border-radius: 5px; background: rgba(37, 99, 235, 0.12); color: var(--accent); }
+.rtrdev-tag { flex: 0 0 auto; font-size: 0.7rem; padding: 1px 6px; border-radius: 5px; background: rgba(217, 119, 6, 0.16); color: #92400e; }
+.rtrdev-net { flex: 0 0 auto; font-size: 0.8rem; color: var(--muted); white-space: nowrap; }
+.rtrdev-last { flex: 0 0 auto; font-size: 0.75rem; color: var(--muted); white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.rtrdev-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--off); }
+.rtrdev-dot.on { background: var(--ok); }
+
 /* 页脚 */
 footer.foot { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 0.82rem; color: var(--muted); display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 

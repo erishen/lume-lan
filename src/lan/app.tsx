@@ -90,6 +90,15 @@ function Dashboard(): React.ReactElement {
     });
   }, [data, kw, onlyLive]);
 
+  /* 路由器终端流量 Top 5(按累计下载排序,数据已按该序下发)。 */
+  const top5 = React.useMemo(() => {
+    if (!router || !router.router_devices) return [];
+    const list = [...router.router_devices].sort((a, b) => (b.rx_bytes ?? 0) - (a.rx_bytes ?? 0));
+    const max = Math.max(1, list[0]?.rx_bytes ?? 1);
+    return list.slice(0, 5).map((d) => ({ d, pct: Math.round(((d.rx_bytes ?? 0) / max) * 100) }));
+  }, [router]);
+  const [showAll, setShowAll] = React.useState(false);
+
   return (
     <section className="dash">
       {data && !data.missing ? (
@@ -108,22 +117,47 @@ function Dashboard(): React.ReactElement {
                 {router.model ? <span className="routermeta">{router.model}</span> : null}
                 {router.serial ? <span className="routermeta mono">SN {router.serial}</span> : null}
                 {router.manufacturer_oui ? <span className="routermeta">OUI {router.manufacturer_oui}</span> : null}
+                {(router.router_count ?? 0) > 0 ? <span className="routermeta">· {router.router_count} 台终端，在线 {router.router_online ?? "—"}</span> : null}
               </div>
-              {(router.router_devices && router.router_devices.length > 0) ? (
+              {top5.length > 0 ? (
+                <div className="rtrtop">
+                  <div className="rtrtop-title">流量排行（累计下载 Top {top5.length}）</div>
+                  {top5.map((item, i) => (
+                    <div key={item.d.ip + item.d.mac} className="rtrtop-row">
+                      <span className={"rtrtop-rank" + (i === 0 ? " top" : "")}>{i + 1}</span>
+                      <span className="rtrtop-name">{item.d.hostname || item.d.mac}</span>
+                      <span className="rtrtop-ip mono">{item.d.ip}</span>
+                      {item.d.vendor ? <span className="rtrtop-vendor">{item.d.vendor}</span> : null}
+                      {item.d.online ? <span className="rtrtop-live">在线</span> : null}
+                      <div className="rtrtop-bar"><div style={{ width: item.pct + "%" }} /></div>
+                      <span className="rtrtop-net">↓{fmtBytes(item.d.rx_bytes)} · ↑{fmtBytes(item.d.tx_bytes)}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {router.login_ok ? (
                 <div className="rtrdevs">
-                  <div className="rtrdevs-title">路由器终端 / 流量（{router.router_count}，来源 {router.terminal_source}）</div>
-                  {router.router_devices.map((d) => (
-                    <div key={d.ip + d.mac} className="rtrdev">
+                  {router.router_devices && router.router_devices.length > 5 ? (
+                    <button className="rtrdevs-toggle" onClick={() => setShowAll(!showAll)}>
+                      {showAll ? "收起完整列表" : `展开全部 ${router.router_count} 台终端`}
+                    </button>
+                  ) : null}
+                  {(showAll ? router.router_devices : (router.router_devices?.slice(0, 5) ?? [])).map((d) => (
+                    <div key={d.ip + d.mac} className={"rtrdev" + (d.online ? "" : " off")}>
                       <span className="rtrdev-ip mono">{d.ip}</span>
-                      {d.hostname ? <span className="rtrdev-host">{d.hostname}</span> : null}
+                      <span className="rtrdev-host">{d.hostname || d.mac}</span>
+                      {d.vendor ? <span className="rtrdev-vendor">{d.vendor}</span> : null}
+                      {d.guest ? <span className="rtrdev-tag">访客</span> : null}
                       <span className="rtrdev-net">↑{fmtBytes(d.tx_bytes)} ↓{fmtBytes(d.rx_bytes)}</span>
+                      {d.last_seen ? <span className="rtrdev-last">{d.last_seen.slice(5)}</span> : null}
+                      <span className={"rtrdev-dot" + (d.online ? " on" : "")} />
                     </div>
                   ))}
                 </div>
               ) : (
                 <div className="routernote">
-                  登录态的终端列表 / 每设备流量未取到（HiLink 私有端点 + 加密请求体，curl 无法直接调）。
-                  宿主：在 <code>.env</code> 填 <code>ROUTER_PASS</code>，并从浏览器后台 Network 面板把「终端管理 / 流量」的真实端点填进 <code>ROUTER_TERMINAL_API</code>，再 <code>make router-fetch</code>。
+                  登录态终端列表未取到：{router.login_error || "路由器登录失败"}。
+                  请确认 <code>.env</code> 的 <code>ROUTER_PASS</code> 正确后重跑 <code>make router-fetch</code>。
                 </div>
               )}
             </div>

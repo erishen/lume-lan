@@ -39,12 +39,20 @@ def norm_mac(m: str) -> str:
     return ":".join(p.zfill(2) for p in parts)
 
 
-def is_noise(ip: str, mac: str) -> bool:
-    """过滤非真实设备：169.254/16 link-local、广播 MAC、全 0 单播。"""
+def is_noise(ip: str, mac: str, iface: str = "") -> bool:
+    """过滤非真实设备：
+    - 169.254/16 link-local
+    - 广播 / 全 0 MAC
+    - macOS 虚拟 bridge 接口（bridge100/106/... 是本机自分配子网，非真实 LAN 设备）
+    - x.x.x.0 网络地址（ARP 表会列出虚拟子网的网络位，非可连设备）"""
     if ip.startswith("169.254."):
         return True
     mm = mac.lower()
     if mm in ("", "ff:ff:ff:ff:ff:ff", "00:00:00:00:00:00"):
+        return True
+    if iface and iface.startswith("bridge"):
+        return True
+    if ip.endswith(".0"):
         return True
     return False
 
@@ -174,8 +182,11 @@ def main():
     for d in devices:
         if d["ip"] == gw:
             d["gateway"] = True
-    # 过滤噪音条目（link-local / 广播 / 全 0），但保留网关
-    devices = [d for d in devices if not (is_noise(d["ip"], d.get("mac", "")) and not d.get("gateway"))]
+    # 过滤噪音条目（link-local / 广播 / 全 0 / 虚拟 bridge 接口 / .0 网络位），但保留网关
+    devices = [
+        d for d in devices
+        if not (is_noise(d["ip"], d.get("mac", ""), d.get("iface", "")) and not d.get("gateway"))
+    ]
     payload = {
         "gateway": gw,
         "subnet": f"{detect_network(gw)}/24",

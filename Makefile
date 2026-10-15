@@ -1,10 +1,12 @@
 # lume-lan Makefile — 局域网设备看板(Lume 服务端 + React + 宿主扫描脚本)
 #
 # 常用:
-#   make dev       日常入口(热更):先 stop 清掉 PORT 旧服务/残留 watch,再 check+scan,
-#                  然后 esbuild --watch(改 .tsx 即自动重打包,毫秒级)+ 前台起 Lume。
-#                  前台阻塞,Ctrl-C 退出时自动清掉 esbuild watch;重复执行先清旧实例,不撞端口。
-#   make stop      只停:kill PORT 上旧服务 + 残留 esbuild watch(不重启)
+#   make dev       日常入口(热更):先 stop 清掉 PORT 旧服务/残留 watch/数据循环,再 check+scan,
+#                  然后 esbuild --watch(改 .tsx 即自动重打包,毫秒级)+ 后台数据刷新循环
+#                  (每 REFRESH_SECS=60s 重跑 scan + router-fetch,让 UI「刷新」按钮读到新快照;
+#                  pid 落 .runtime/refresh.pid,make stop / 下次 make dev 自动清掉)+ 前台起 Lume。
+#                  前台阻塞;重复执行先清旧实例,不撞端口。
+#   make stop      只停:kill PORT 上旧服务 + 残留 esbuild watch + 数据刷新循环(不重启)
 #   make lan       make dev 的别名(向后兼容)
 #   make lan-dev   make dev 的别名(原「watch 版」已并入 dev)
 #
@@ -29,15 +31,18 @@ ESBUILD   := $(shell command -v esbuild 2>/dev/null || echo ../lume/frontend/nod
 
 default: dev
 
-# 停掉 PORT 上的旧服务 + 残留的 esbuild watch(供 dev / lan-dev 复用,也可单独 make stop)。
-# 幂等:没有旧实例时 lsof/pgrep 返回空;每行 kill 都容忍失败(沙箱里跨会话进程可能
-# 杀不动、或本就没有目标),绝不因「杀不掉/没得杀」而让 make 报 Error 中止。
+# 数据自动刷新间隔(秒)，可用 REFRESH_SECS=30 make dev 覆盖。
+REFRESH_SECS ?= 60
+
+# 停掉 PORT 上的旧服务 + 残留 esbuild watch + 数据刷新循环(供 dev / lan-dev 复用,也可单独 make stop)。
 stop:
 	@{ lsof -ti tcp:$(PORT) 2>/dev/null; pgrep -f "lan\.lume" 2>/dev/null; } \
 	| xargs -r kill 2>/dev/null || true
 	@pkill -f "esbuild src/lan/app.tsx" 2>/dev/null || true
+	@cat .runtime/refresh.pid 2>/dev/null | xargs -r kill 2>/dev/null || true
+	@rm -f .runtime/refresh.pid
 	@sleep 1
-	@echo "已停 $(PORT) 上的旧服务与残留 watch(若仍占着,见下方提示)"
+	@echo "已停 $(PORT) 上的旧服务、残留 watch 与数据刷新循环(若仍占着,见下方提示)"
 	@{ if [ -n "$$(lsof -ti tcp:$(PORT) 2>/dev/null)" ]; then \
 	   echo "⚠️ $(PORT) 仍被占用: $$(lsof -ti tcp:$(PORT) 2>/dev/null | tr '\n' ' ')"; \
 	   echo "   宿主手动: lsof -ti tcp:$(PORT) | xargs kill"; fi; } || true
@@ -64,15 +69,19 @@ ui:
 watch:
 	@$(ESBUILD) src/lan/app.tsx --bundle --format=esm --jsx=automatic --outdir=www --outbase=src/lan --watch
 
-# 日常入口(热更):stop(清旧实例)→ check → scan → router-fetch → esbuild --watch(后台)+ 前台起 Lume。
-# 重复执行安全——每次先清掉占 PORT 的上次实例;改 .tsx 秒级热刷;改 .lume 需 Ctrl-C 重跑。
-# 注意(macOS make 默认 /bin/sh = POSIX sh):不能用 "{ cmd & }" 花括号组(& 后紧跟 } 非法)。
-# 故 esbuild watch 单独一行后台(&),Lume 单独一行前台阻塞;Ctrl-C 停 Lume 后,残留的
-# esbuild watch 由「make stop」或「下次 make dev」的 stop 阶段清掉(stop 里已 pkill esbuild)。
+# 日常入口(热更):stop(清旧实例)→ check → scan → router-fetch → esbuild --watch(后台)
+# + 数据刷新循环(后台每 REFRESH_SECS 秒重跑 scan+router-fetch,让「刷新」按钮能拿到新快照;
+#   子 shell pid 落 .runtime/refresh.pid,make stop 用它清掉)→ 前台起 Lume。
+# 重复执行安全——每次先清掉占 PORT 的上次实例。
+# 注意(macOS make 默认 /bin/sh = POSIX sh):不能用 "{ cmd & }" 花括号组(& 后紧跟 } 非法);
+# 数据循环用 { (while...done) & echo $$! > file; } 合法形式(同一行,子 shell 后台启动后立即捕获 PID);
+# Ctrl-C 停 Lume 后,残留的 esbuild watch 和数据循环由「make stop」或「下次 make dev」清掉。
 dev: stop check scan router-fetch
-	@echo "▶ http://127.0.0.1:$(PORT)  (make dev:热更已开,.tsx 改动自动重打包;数据源刷新:make scan)"
+	@echo "▶ http://127.0.0.1:$(PORT)  (make dev:热更已开,.tsx 改动自动重打包)"
 	@$(ESBUILD) src/lan/app.tsx --bundle --format=esm --jsx=automatic --outdir=www --outbase=src/lan --watch &
-	@echo "▶ esbuild watch 已后台;Lume 起服务中(Ctrl-C 停 Lume,残留 watch 由 make stop 清理)"
+	@mkdir -p .runtime; { ( while true; do sleep $(REFRESH_SECS); $(PY) scripts/scan_lan.py >/dev/null 2>&1 || true; $(PY) scripts/router_fetch.py >/dev/null 2>&1 || true; done ) & echo $$! > .runtime/refresh.pid; }
+	@echo "▶ esbuild watch 后台运行;数据每 $(REFRESH_SECS)s 自动刷新(pid $$(cat .runtime/refresh.pid))"
+	@echo "▶ Lume 起服务中(Ctrl-C 停;残留 watch/数据循环由 make stop 清理)"
 	@$(LUME) lan.lume
 
 # 向后兼容:make lan ≡ make dev

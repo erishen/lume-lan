@@ -12,6 +12,7 @@ import { createRoot } from "react-dom/client";
 import {
   DevicesPayload,
   RouterPayload,
+  RouterDevice,
   apiDevices,
   apiRouter,
   fmtTs,
@@ -58,6 +59,35 @@ function DeviceRow({ ip, mac, iface, source, live, gateway, name }: {
       <td><span className={"src src-" + (source || "arp")}>{source === "router" ? "路由器" : source === "sweep" ? "Ping" : "ARP"}</span></td>
       <td>{on === "on" ? <span className="dot on" /> : <span className="dot off" />}{on === "on" ? "在线" : "离线"}</td>
     </tr>
+  );
+}
+
+/* 家庭总流量趋势:纯 div 柱状图(每根柱 = 一个 60s 刷新周期的全家庭流量增量)。
+ * 数据来自 router_traffic_total 累计序列的前端差分;历史 <2 点不显示。 */
+function TrafficChart({ rows, max }: { rows: { ts: number; delta: number }[]; max: number }): React.ReactElement {
+  const spanMin = Math.round((rows[rows.length - 1].ts - rows[0].ts) / 60);
+  const sumDelta = rows.reduce((a, r) => a + r.delta, 0);
+  return (
+    <div className="trend">
+      <div className="trend-title">
+        家庭流量趋势（近 {spanMin} 分钟，每 60s 采样 · 合计 {fmtBytes(sumDelta)}）
+      </div>
+      <div className="trend-bars">
+        {rows.map((r, i) => (
+          <div
+            key={i}
+            className={"trendbar" + (r.delta > 0 ? "" : " zero")}
+            title={`${new Date(r.ts * 1000).toLocaleTimeString("zh-CN", { hour12: false })} · ${fmtBytes(r.delta)}`}
+            style={{ height: Math.max(2, Math.round((r.delta / max) * 100)) + "%" }}
+          />
+        ))}
+      </div>
+      <div className="trend-axis">
+        <span>{new Date(rows[0].ts * 1000).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" })}</span>
+        <span>柱 = 该周期全家庭流量（↑↓ 合计），高柱 = 有人在大量传数据</span>
+        <span>{new Date(rows[rows.length - 1].ts * 1000).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" })}</span>
+      </div>
+    </div>
   );
 }
 
@@ -147,6 +177,45 @@ function Dashboard(): React.ReactElement {
     const max = Math.max(1, list[0]?.rx_bytes ?? 1);
     return list.slice(0, 5).map((d) => ({ d, pct: Math.round(((d.rx_bytes ?? 0) / max) * 100) }));
   }, [router]);
+
+  /* 设备类型分布(路由器 IconType: mobile/laptop/computer/television/tablet/android)。 */
+  const typeDist = React.useMemo(() => {
+    const labelOf: Record<string, string> = {
+      mobile: "手机", laptop: "笔记本", computer: "电脑",
+      television: "电视", tablet: "平板", android: "Android",
+    };
+    const m = new Map<string, number>();
+    router?.router_devices?.forEach((d) => {
+      if (d.icon) m.set(d.icon, (m.get(d.icon) || 0) + 1);
+    });
+    return [...m.entries()]
+      .map(([k, n]) => ({ label: labelOf[k] || k, n }))
+      .sort((a, b) => b.n - a.n);
+  }, [router]);
+
+  /* Wi-Fi 频段分布(5GHz / 2.4GHz)。 */
+  const freqDist = React.useMemo(() => {
+    const m = new Map<string, number>();
+    router?.router_devices?.forEach((d) => {
+      if (d.freq) m.set(d.freq, (m.get(d.freq) || 0) + 1);
+    });
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }, [router]);
+
+  /* 家庭总流量趋势:router_traffic_total 是累计值序列,相邻点差值 = 该刷新周期的流量。
+   * 取最近 180 点(60s 循环 ≈ 3 小时)。 */
+  const trafficTrend = React.useMemo(() => {
+    const s = router?.router_traffic_total;
+    if (!s || s.length < 2) return null;
+    const pts = s.slice(-180);
+    let max = 1;
+    const rows = pts.map((p, i) => {
+      const delta = i === 0 ? 0 : Math.max(0, p.rx - pts[i - 1].rx + p.tx - pts[i - 1].tx);
+      if (delta > max) max = delta;
+      return { ts: p.ts, delta };
+    });
+    return { rows, max };
+  }, [router]);
   const [showAll, setShowAll] = React.useState(false);
 
   return (
@@ -174,6 +243,27 @@ function Dashboard(): React.ReactElement {
                   ⏳ {router.login_stale_note || "本次登录失败/冷却中，以下沿用上次的终端数据"}（自动循环稍后重试，无需操作）
                 </div>
               ) : null}
+              {trafficTrend ? <TrafficChart rows={trafficTrend.rows} max={trafficTrend.max} /> : null}
+              {(typeDist.length > 0 || freqDist.length > 0) ? (
+                <div className="rtrdist">
+                  {typeDist.length > 0 ? (
+                    <div className="rtrdist-row">
+                      <span className="rtrdist-label">设备类型</span>
+                      {typeDist.map((t) => (
+                        <span key={t.label} className="rtrdist-chip">{t.label} {t.n}</span>
+                      ))}
+                    </div>
+                  ) : null}
+                  {freqDist.length > 0 ? (
+                    <div className="rtrdist-row">
+                      <span className="rtrdist-label">Wi-Fi 频段</span>
+                      {freqDist.map(([f, n]) => (
+                        <span key={f} className={"rtrdist-chip" + (f.indexOf("5G") === 0 ? " g5" : " g24")}>{f} {n}</span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               {top5.length > 0 ? (
                 <div className="rtrtop">
                   <div className="rtrtop-title">流量排行（累计下载 Top {top5.length}）</div>
@@ -186,6 +276,11 @@ function Dashboard(): React.ReactElement {
                       {item.d.online ? <span className={"rtrtop-live" + (isActive(item.d) ? "" : " idle")}>{isActive(item.d) ? "活跃" : "挂起"}</span> : null}
                       <div className="rtrtop-bar"><div style={{ width: item.pct + "%" }} /></div>
                       <span className="rtrtop-net">↓{fmtBytes(item.d.rx_bytes)} · ↑{fmtBytes(item.d.tx_bytes)}</span>
+                      {item.d.delta_1h !== undefined && item.d.delta_1h !== null ? (
+                        <span className="rtrtop-rate" title="近 1h 平均速率（增量/3600）">
+                          {fmtBytes(Math.round(item.d.delta_1h / 3600))}/s
+                        </span>
+                      ) : null}
                     </div>
                   ))}
                 </div>

@@ -181,6 +181,24 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .rtrtop-bar { flex: 0 0 90px; height: 8px; border-radius: 4px; background: rgba(120, 130, 150, 0.15); overflow: hidden; }
 .rtrtop-bar > div { height: 100%; background: linear-gradient(90deg, var(--accent), #60a5fa); border-radius: 4px; }
 .rtrtop-net { flex: 0 0 auto; font-size: 0.78rem; color: var(--muted); white-space: nowrap; min-width: 120px; text-align: right; }
+.rtrtop-rate { flex: 0 0 auto; font-size: 0.72rem; color: var(--ok); white-space: nowrap; min-width: 70px; text-align: right; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* 家庭流量趋势(纯 div 柱状图) */
+.trend { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; }
+.trend-title { font-size: 0.82rem; font-weight: 600; color: var(--fg); margin-bottom: 8px; }
+.trend-bars { display: flex; align-items: flex-end; gap: 2px; height: 96px; padding: 4px; background: rgba(120, 130, 150, 0.06); border-radius: 8px; overflow: hidden; }
+.trendbar { flex: 1; min-width: 2px; height: 100%; background: linear-gradient(180deg, #60a5fa, var(--accent)); border-radius: 2px 2px 0 0; transition: height .3s; }
+.trendbar.zero { background: rgba(120, 130, 150, 0.25); }
+.trend-axis { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 0.72rem; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.trend-axis span:nth-child(2) { font-family: inherit; }
+
+/* 设备类型 / 频段 分布 chip */
+.rtrdist { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.rtrdist-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rtrdist-label { font-size: 0.78rem; color: var(--muted); min-width: 56px; }
+.rtrdist-chip { font-size: 0.75rem; padding: 2px 8px; border-radius: 6px; background: rgba(120, 130, 150, 0.12); color: var(--fg); }
+.rtrdist-chip.g5 { background: rgba(22, 163, 74, 0.14); color: var(--ok); }
+.rtrdist-chip.g24 { background: rgba(37, 99, 235, 0.14); color: var(--accent); }
 
 /* 完整终端列表：开关 + 行内字段 + 在线点 */
 .rtrdevs-toggle {

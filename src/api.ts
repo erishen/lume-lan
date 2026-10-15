@@ -48,6 +48,17 @@ export interface RouterDevice {
   last_seen?: string;
   /** 近 1 小时流量增量(字节); null/undefined = 历史不足未知。 */
   delta_1h?: number | null;
+  /** 路由器识别的设备类型(mobile/laptop/computer/television/tablet/android)。 */
+  icon?: string;
+  /** Wi-Fi 频段(5GHz/2.4GHz)。 */
+  freq?: string;
+}
+
+/** 家庭总流量序列的一个采样点(宿主每 60s 记一次, 全设备 rx+tx 累计求和)。 */
+export interface TrafficPoint {
+  ts: number;
+  rx: number;
+  tx: number;
 }
 
 export interface RouterPayload {
@@ -70,6 +81,8 @@ export interface RouterPayload {
   router_online?: number;
   /** 在线且近 1h 有实际流量(≥1MB)的设备数, 区别于「挂起中」的心跳设备。 */
   router_active?: number;
+  /** 家庭总流量序列(全设备 rx+tx 累计求和, 每 60s 一个点), 用于趋势曲线。 */
+  router_traffic_total?: TrafficPoint[];
 }
 
 export async function apiGet<T>(url: string): Promise<T> {

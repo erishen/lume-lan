@@ -24564,6 +24564,33 @@ function DeviceRow({ ip, mac, iface, source, live, gateway, name }) {
     ] })
   ] });
 }
+function TrafficChart({ rows, max }) {
+  const spanMin = Math.round((rows[rows.length - 1].ts - rows[0].ts) / 60);
+  const sumDelta = rows.reduce((a, r) => a + r.delta, 0);
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "trend", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "trend-title", children: [
+      "\u5BB6\u5EAD\u6D41\u91CF\u8D8B\u52BF\uFF08\u8FD1 ",
+      spanMin,
+      " \u5206\u949F\uFF0C\u6BCF 60s \u91C7\u6837 \xB7 \u5408\u8BA1 ",
+      fmtBytes(sumDelta),
+      "\uFF09"
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "trend-bars", children: rows.map((r, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+      "div",
+      {
+        className: "trendbar" + (r.delta > 0 ? "" : " zero"),
+        title: `${new Date(r.ts * 1e3).toLocaleTimeString("zh-CN", { hour12: false })} \xB7 ${fmtBytes(r.delta)}`,
+        style: { height: Math.max(2, Math.round(r.delta / max * 100)) + "%" }
+      },
+      i
+    )) }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "trend-axis", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: new Date(rows[0].ts * 1e3).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" }) }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "\u67F1 = \u8BE5\u5468\u671F\u5168\u5BB6\u5EAD\u6D41\u91CF\uFF08\u2191\u2193 \u5408\u8BA1\uFF09\uFF0C\u9AD8\u67F1 = \u6709\u4EBA\u5728\u5927\u91CF\u4F20\u6570\u636E" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: new Date(rows[rows.length - 1].ts * 1e3).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" }) })
+    ] })
+  ] });
+}
 function Dashboard() {
   const [data, setData] = import_react.default.useState(null);
   const [router, setRouter] = import_react.default.useState(null);
@@ -24631,6 +24658,40 @@ function Dashboard() {
     const max = Math.max(1, list[0]?.rx_bytes ?? 1);
     return list.slice(0, 5).map((d) => ({ d, pct: Math.round((d.rx_bytes ?? 0) / max * 100) }));
   }, [router]);
+  const typeDist = import_react.default.useMemo(() => {
+    const labelOf = {
+      mobile: "\u624B\u673A",
+      laptop: "\u7B14\u8BB0\u672C",
+      computer: "\u7535\u8111",
+      television: "\u7535\u89C6",
+      tablet: "\u5E73\u677F",
+      android: "Android"
+    };
+    const m = /* @__PURE__ */ new Map();
+    router?.router_devices?.forEach((d) => {
+      if (d.icon) m.set(d.icon, (m.get(d.icon) || 0) + 1);
+    });
+    return [...m.entries()].map(([k, n]) => ({ label: labelOf[k] || k, n })).sort((a, b) => b.n - a.n);
+  }, [router]);
+  const freqDist = import_react.default.useMemo(() => {
+    const m = /* @__PURE__ */ new Map();
+    router?.router_devices?.forEach((d) => {
+      if (d.freq) m.set(d.freq, (m.get(d.freq) || 0) + 1);
+    });
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }, [router]);
+  const trafficTrend = import_react.default.useMemo(() => {
+    const s = router?.router_traffic_total;
+    if (!s || s.length < 2) return null;
+    const pts = s.slice(-180);
+    let max = 1;
+    const rows = pts.map((p, i) => {
+      const delta = i === 0 ? 0 : Math.max(0, p.rx - pts[i - 1].rx + p.tx - pts[i - 1].tx);
+      if (delta > max) max = delta;
+      return { ts: p.ts, delta };
+    });
+    return { rows, max };
+  }, [router]);
   const [showAll, setShowAll] = import_react.default.useState(false);
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dash", children: [
     data && !data.missing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -24681,6 +24742,25 @@ function Dashboard() {
           router.login_stale_note || "\u672C\u6B21\u767B\u5F55\u5931\u8D25/\u51B7\u5374\u4E2D\uFF0C\u4EE5\u4E0B\u6CBF\u7528\u4E0A\u6B21\u7684\u7EC8\u7AEF\u6570\u636E",
           "\uFF08\u81EA\u52A8\u5FAA\u73AF\u7A0D\u540E\u91CD\u8BD5\uFF0C\u65E0\u9700\u64CD\u4F5C\uFF09"
         ] }) : null,
+        trafficTrend ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TrafficChart, { rows: trafficTrend.rows, max: trafficTrend.max }) : null,
+        typeDist.length > 0 || freqDist.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrdist", children: [
+          typeDist.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrdist-row", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdist-label", children: "\u8BBE\u5907\u7C7B\u578B" }),
+            typeDist.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "rtrdist-chip", children: [
+              t.label,
+              " ",
+              t.n
+            ] }, t.label))
+          ] }) : null,
+          freqDist.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrdist-row", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdist-label", children: "Wi-Fi \u9891\u6BB5" }),
+            freqDist.map(([f, n]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "rtrdist-chip" + (f.indexOf("5G") === 0 ? " g5" : " g24"), children: [
+              f,
+              " ",
+              n
+            ] }, f))
+          ] }) : null
+        ] }) : null,
         top5.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrtop", children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrtop-title", children: [
             "\u6D41\u91CF\u6392\u884C\uFF08\u7D2F\u8BA1\u4E0B\u8F7D Top ",
@@ -24699,7 +24779,11 @@ function Dashboard() {
               fmtBytes(item.d.rx_bytes),
               " \xB7 \u2191",
               fmtBytes(item.d.tx_bytes)
-            ] })
+            ] }),
+            item.d.delta_1h !== void 0 && item.d.delta_1h !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "rtrtop-rate", title: "\u8FD1 1h \u5E73\u5747\u901F\u7387\uFF08\u589E\u91CF/3600\uFF09", children: [
+              fmtBytes(Math.round(item.d.delta_1h / 3600)),
+              "/s"
+            ] }) : null
           ] }, item.d.ip + item.d.mac))
         ] }) : null,
         router.router_devices && router.router_devices.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrdevs", children: [

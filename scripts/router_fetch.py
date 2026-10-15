@@ -222,6 +222,8 @@ def extract_hostinfo(payload) -> list:
             "wired": (not bool(d.get("WlanActive"))) if d.get("WlanActive") in (True, False) else None,
             "guest": bool(d.get("IsGuest")),
             "last_seen": last,
+            "icon": str(d.get("IconType") or "").strip().lower(),
+            "freq": str(d.get("Frequency") or "").strip(),
         })
     out.sort(key=lambda x: (not x["online"], -x["rx_bytes"]))
     return out
@@ -242,7 +244,29 @@ def _load_last_devices() -> dict:
 
 # ---- 流量历史(算「近 1 小时增量」, 区分 活跃/挂起中) ----
 HIST = os.path.join(ROOT, ".data", "router_traffic_hist.json")
+HIST_TOTAL = os.path.join(ROOT, ".data", "router_traffic_hist_total.json")
 HIST_CAP = 300      # 每 IP 保留的历史点数上限(60s 一循环 ≈ 5 小时, 远超基线所需)
+
+
+def record_total_traffic(devices: list, fetched_at: int) -> list:
+    """家庭总流量序列: 全部设备 rx+tx 累计值求和, 每轮记一个点(截断保留 300 点)。
+    返回 [ {ts, rx, tx}, ... ] 供前端画趋势曲线。"""
+    try:
+        hist = json.load(open(HIST_TOTAL, encoding="utf-8"))
+        if not isinstance(hist, list):
+            hist = []
+    except Exception:
+        hist = []
+    total_rx = sum(d.get("rx_bytes") or 0 for d in devices)
+    total_tx = sum(d.get("tx_bytes") or 0 for d in devices)
+    hist.append({"ts": fetched_at, "rx": total_rx, "tx": total_tx})
+    while len(hist) > HIST_CAP:
+        hist.pop(0)
+    tmp = HIST_TOTAL + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(hist, f, ensure_ascii=False)
+    os.replace(tmp, HIST_TOTAL)
+    return hist
 
 
 def _load_hist() -> dict:
@@ -385,6 +409,8 @@ def main():
 
     # 计算近 1 小时流量增量(区分 活跃/挂起中), 并把本轮累计值记入历史
     apply_traffic_deltas(devices, fetched_at)
+    # 家庭总流量序列(全部设备 rx+tx 求和, 每轮一个点) → 前端趋势曲线
+    total_series = record_total_traffic(devices, fetched_at)
 
     payload_out = {
         "router": router,
@@ -397,6 +423,7 @@ def main():
         "router_active": sum(1 for d in devices
                              if d.get("online")
                              and (d.get("delta_1h") is None or d.get("delta_1h", 0) >= 1048576)),
+        "router_traffic_total": total_series,
         "probe": probe,
     }
     os.makedirs(os.path.dirname(OUT), exist_ok=True)

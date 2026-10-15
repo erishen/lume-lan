@@ -596,7 +596,7 @@ function Dashboard(): React.ReactElement {
                       {d.vendor ? <span className="rtrdev-vendor">{d.vendor}</span> : null}
                       <Rssi rssi={d.rssi} wired={d.wired} linkQuality={d.link_quality} />
                       {d.guest ? <span className="rtrdev-tag">访客</span> : null}
-                      <span className="rtrdev-net">↑{fmtBytes(d.tx_bytes)} ↓{fmtBytes(d.rx_bytes)}</span>
+                      <span className="rtrdev-net">↓{fmtBytes(d.rx_bytes)} · ↑{fmtBytes(d.tx_bytes)}</span>
                       {d.last_seen ? <span className="rtrdev-last">{d.last_seen.slice(5)}</span> : null}
                       <span className={"rtrdev-state st-" + st}>
                         {st === "off" ? "离线" : st === "idle" ? "挂起中" : "活跃"}

@@ -25129,10 +25129,10 @@ function Dashboard() {
                   /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Rssi, { rssi: d.rssi, wired: d.wired, linkQuality: d.link_quality }),
                   d.guest ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-tag", children: "\u8BBF\u5BA2" }) : null,
                   /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "rtrdev-net", children: [
-                    "\u2191",
-                    fmtBytes(d.tx_bytes),
-                    " \u2193",
-                    fmtBytes(d.rx_bytes)
+                    "\u2193",
+                    fmtBytes(d.rx_bytes),
+                    " \xB7 \u2191",
+                    fmtBytes(d.tx_bytes)
                   ] }),
                   d.last_seen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-last", children: d.last_seen.slice(5) }) : null,
                   /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-state st-" + st, children: st === "off" ? "\u79BB\u7EBF" : st === "idle" ? "\u6302\u8D77\u4E2D" : "\u6D3B\u8DC3" }),

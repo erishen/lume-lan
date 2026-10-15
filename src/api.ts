@@ -99,6 +99,22 @@ export interface TrafficPoint {
   top_delta?: number;
 }
 
+/** 单设备流量历史的一个采样点(累计值, 宿主每 60s 记一次, 保留 300 点 ≈ 5h)。 */
+export interface DeviceTrafficPoint {
+  ts: number;
+  rx: number;
+  tx: number;
+}
+
+/** 每设备流量历史响应:{ip: 累计值序列}。 */
+export interface RouterTrafficPayload {
+  available: boolean;
+  note?: string;
+  /** {ip: DeviceTrafficPoint[]} 每设备的累计流量序列(按 ts 升序)。 */
+  series?: Record<string, DeviceTrafficPoint[]>;
+  ip_count?: number;
+}
+
 export interface RouterPayload {
   available: boolean;
   note?: string;
@@ -145,6 +161,10 @@ export function apiMeta(): Promise<Meta> {
 
 export function apiRouter(): Promise<RouterPayload> {
   return apiGet<RouterPayload>("/api/router");
+}
+
+export function apiRouterTraffic(): Promise<RouterTrafficPayload> {
+  return apiGet<RouterTrafficPayload>("/api/router-traffic");
 }
 
 export function fmtBytes(n?: number): string {

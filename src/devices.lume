@@ -11,6 +11,9 @@ let router_path = ".data/router.json";
 // 本地设备命名层(.data/aliases.json):{ip: 名字}。对「路由器没给好名字 / 想在
 // 本地覆盖」的设备显示本地别名(最高优先级, 不依赖路由器登录态)。缺文件 → 空表。
 let aliases_path = ".data/aliases.json";
+// 每设备流量历史(.data/router_traffic_hist.json, 宿主每 60s 追加, 每 IP 保留 300 点)。
+// 单独一个端点 /api/router-traffic 惰性读它, 不让 400KB 的历史进 router.json。
+let hist_path = ".data/router_traffic_hist.json";
 // 快照「过期」阈值(秒):超过就提示前端重新 make scan。可经 env 覆盖。
 let stale_secs = env("LAN_STALE_SECS");
 if (stale_secs == null) { stale_secs = "300"; }
@@ -32,6 +35,23 @@ func load_aliases() {
   if (r.err != null) { return {}; }
   if (r.ok == null) { return {}; }
   return r.ok;
+}
+
+// 每设备流量历史:读 .data/router_traffic_hist.json({ip: [{ts,rx,tx}×300]})。
+// 惰性单端点读取(不塞进 router.json), 前端点选某台设备看它近 5h 流量曲线。
+// 缺文件/损坏 → { available:false } 优雅降级, 不 500。
+export func router_traffic_payload() {
+  let txt = read_file(hist_path);
+  if (txt == null) {
+    return { available: false, note: "暂无流量历史——宿主数据循环跑 10 分钟后才有基线" };
+  }
+  let r = try(() => json(txt));
+  if (r.err != null || r.ok == null) {
+    return { available: false, note: "流量历史损坏——重跑 make router-fetch" };
+  }
+  // {ip: series} 原样下发; 前端按需取某台、差分画增量。
+  let n = len(r.ok);
+  return { available: true, series: r.ok, ip_count: n };
 }
 
 // 设备列表:读快照 + 派生统计(总数/在线数/是否过期)。缺失 → 空表 + 指引文案。

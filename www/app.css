@@ -191,6 +191,17 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .rtrtop-bar > div { height: 100%; background: linear-gradient(90deg, var(--accent), #60a5fa); border-radius: 4px; }
 .rtrtop-net { flex: 0 0 auto; font-size: 0.78rem; color: var(--muted); white-space: nowrap; min-width: 120px; text-align: right; }
 .rtrtop-rate { flex: 0 0 auto; font-size: 0.72rem; color: var(--ok); white-space: nowrap; min-width: 70px; text-align: right; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.rtrtop-hint { font-size: 0.72rem; font-weight: 400; color: var(--muted); margin-left: 8px; }
+
+/* 可点选设备行(Top5/终端): hover 高亮, 选中描边, 供点选看单设备流量曲线 */
+.rtrtop-row.click, .rtrdev.click { cursor: pointer; transition: background 0.12s; }
+.rtrtop-row.click:hover, .rtrdev.click:hover { background: rgba(37, 99, 235, 0.07); }
+.rtrtop-row.sel, .rtrdev.sel { background: rgba(37, 99, 235, 0.12); outline: 1px solid rgba(37, 99, 235, 0.35); outline-offset: -1px; border-radius: 6px; }
+
+/* 单设备流量曲线(PerDeviceChart): 副标题 + 末根柱高亮 */
+.perdev-sub { font-size: 0.75rem; font-weight: 400; color: var(--muted); margin-left: 6px; }
+.perdev .trend-title b { color: var(--fg); }
+.trendbar.last { background: linear-gradient(180deg, #34d399, var(--ok)); }
 
 /* WAN 状态卡(默认连接/接入方式/IPv4/IPv6/DNS/NAT/带宽峰值) */
 .wancard { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; }

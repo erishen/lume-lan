@@ -13,8 +13,10 @@ import {
   DevicesPayload,
   RouterPayload,
   RouterDevice,
+  RouterTrafficPayload,
   apiDevices,
   apiRouter,
+  apiRouterTraffic,
   fmtTs,
   fmtAge,
   fmtBytes,
@@ -145,6 +147,42 @@ function WanCard({ wan }: { wan: RouterPayload["router_wan"] }): React.ReactElem
   );
 }
 
+/* 单设备流量趋势:纯 div 柱状图(每根柱 = 该设备一个 60s 周期的流量增量,↑↓ 合计)。
+ * 数据来自 /api/router-traffic 的该设备累计序列, 前端差分; 历史 <2 点不显示。
+ * 头部标注设备名/IP + 窗口内 下载/上传/合计, 点「×」收起。 */
+function PerDeviceChart({ device, rows, max, win }: {
+  device: { name: string; ip: string };
+  rows: { ts: number; delta: number; up: number; down: number }[];
+  max: number;
+  win: { rx: number; tx: number; spanMin: number };
+}): React.ReactElement {
+  const peak = rows.reduce((a, r) => (r.delta > a.delta ? r : a), rows[0]);
+  const peakTime = new Date(peak.ts * 1000).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" });
+  return (
+    <div className="trend perdev">
+      <div className="trend-title">
+        {device.name ? device.name + " " : null}<span className="trend-peak-ip mono">{device.ip}</span>
+        <span className="perdev-sub">· 近 {win.spanMin} 分钟 · ↓{fmtBytes(win.rx)} ↑{fmtBytes(win.tx)}</span>
+      </div>
+      <div className="trend-bars">
+        {rows.map((r, i) => (
+          <div
+            key={i}
+            className={"trendbar" + (i === rows.length - 1 ? " last" : "") + (r.delta > 0 ? "" : " zero")}
+            title={`${new Date(r.ts * 1000).toLocaleTimeString("zh-CN", { hour12: false })} · ↓${fmtBytes(r.down)} ↑${fmtBytes(r.up)}`}
+            style={{ height: Math.max(2, Math.round((r.delta / max) * 100)) + "%" }}
+          />
+        ))}
+      </div>
+      <div className="trend-axis">
+        <span>{new Date(rows[0].ts * 1000).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" })}</span>
+        <span>柱 = 该设备该周期流量（↑↓ 合计）· 峰值 {peakTime} {fmtBytes(peak.delta)}</span>
+        <span>{new Date(rows[rows.length - 1].ts * 1000).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" })}</span>
+      </div>
+    </div>
+  );
+}
+
 function Dashboard(): React.ReactElement {
   const [data, setData] = React.useState<DevicesPayload | null>(null);
   const [router, setRouter] = React.useState<RouterPayload | null>(null);
@@ -154,13 +192,21 @@ function Dashboard(): React.ReactElement {
   const [typeFilter, setTypeFilter] = React.useState("");
   const [freqFilter, setFreqFilter] = React.useState("");
   const [lastFetch, setLastFetch] = React.useState<number>(0);
+  /* 单设备流量趋势: 点选某台设备(Top5/终端行)看它近 5h 自己的曲线 */
+  const [selIp, setSelIp] = React.useState<string>("");
+  const [rtrTraffic, setRtrTraffic] = React.useState<RouterTrafficPayload | null>(null);
 
   const load = React.useCallback(async () => {
     setErr("");
     try {
-      const [d, ro] = await Promise.all([apiDevices(), apiRouter().catch(() => null)]);
+      const [d, ro, rt] = await Promise.all([
+        apiDevices(),
+        apiRouter().catch(() => null),
+        apiRouterTraffic().catch(() => null),
+      ]);
       setData(d);
       setRouter(ro);
+      setRtrTraffic(rt);
       setLastFetch(Date.now());
     } catch (e) {
       setErr((e as Error).message);
@@ -336,6 +382,31 @@ function Dashboard(): React.ReactElement {
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(a.href);
   }, [router, ipNames]);
+
+  /* 选中设备(Top5/终端行点选)的近 5h 流量曲线: 取 rtrTraffic.series[selIp] 累计序列,
+   * 前端差分成每 60s 周期的 ↓/↑ 增量; <2 点无基线则 null。 */
+  const selChart = React.useMemo(() => {
+    if (!selIp || !rtrTraffic?.series) return null;
+    const s = rtrTraffic.series[selIp];
+    if (!s || s.length < 2) return null;
+    let max = 1;
+    let winRx = 0, winTx = 0;
+    const rows = s.map((p, i) => {
+      const down = i === 0 ? 0 : Math.max(0, p.rx - s[i - 1].rx);
+      const up = i === 0 ? 0 : Math.max(0, p.tx - s[i - 1].tx);
+      const delta = down + up;
+      if (delta > max) max = delta;
+      winRx += down; winTx += up;
+      return { ts: p.ts, delta, up, down };
+    });
+    const spanMin = Math.round((s[s.length - 1].ts - s[0].ts) / 60);
+    const dev = router?.router_devices?.find((d) => d.ip === selIp);
+    return {
+      device: { name: ipNames.get(selIp) || dev?.hostname || dev?.vendor || "", ip: selIp },
+      rows, max,
+      win: { rx: winRx, tx: winTx, spanMin },
+    };
+  }, [selIp, rtrTraffic, router, ipNames]);
   const [showAll, setShowAll] = React.useState(false);
 
   return (
@@ -412,9 +483,15 @@ function Dashboard(): React.ReactElement {
               ) : null}
               {top5.length > 0 ? (
                 <div className="rtrtop">
-                  <div className="rtrtop-title">流量排行（累计下载 Top {top5.length}）</div>
+                  <div className="rtrtop-title">流量排行（累计下载 Top {top5.length}）<span className="rtrtop-hint">· 点选看该设备流量曲线</span></div>
                   {top5.map((item, i) => (
-                    <div key={item.d.ip + item.d.mac} className="rtrtop-row">
+                    <div
+                      key={item.d.ip + item.d.mac}
+                      className={"rtrtop-row" + (selIp === item.d.ip ? " sel" : " click")}
+                      onClick={() => setSelIp(selIp === item.d.ip ? "" : item.d.ip)}
+                      role="button"
+                      tabIndex={0}
+                    >
                       <span className={"rtrtop-rank" + (i === 0 ? " top" : "")}>{i + 1}</span>
                       <span className="rtrtop-name">{item.d.hostname || item.d.mac}</span>
                       <span className="rtrtop-ip mono">{item.d.ip}</span>
@@ -431,6 +508,9 @@ function Dashboard(): React.ReactElement {
                   ))}
                 </div>
               ) : null}
+              {selChart ? (
+                <PerDeviceChart device={selChart.device} rows={selChart.rows} max={selChart.max} win={selChart.win} />
+              ) : null}
               {router.router_devices && router.router_devices.length > 0 ? (
                 <div className="rtrdevs">
                   {router.router_devices && router.router_devices.length > 5 ? (
@@ -441,7 +521,13 @@ function Dashboard(): React.ReactElement {
                   {(showAll ? router.router_devices : (router.router_devices?.slice(0, 5) ?? [])).map((d) => {
                     const st = !d.online ? "off" : isActive(d) ? "on" : "idle";
                     return (
-                    <div key={d.ip + d.mac} className={"rtrdev " + (d.online ? "" : "off")}>
+                    <div
+                      key={d.ip + d.mac}
+                      className={"rtrdev " + (d.online ? "" : "off") + (selIp === d.ip ? " sel" : " click")}
+                      onClick={() => setSelIp(selIp === d.ip ? "" : d.ip)}
+                      role="button"
+                      tabIndex={0}
+                    >
                       <span className="rtrdev-ip mono">{d.ip}</span>
                       <span className="rtrdev-host">{d.hostname || d.mac}</span>
                       {d.vendor ? <span className="rtrdev-vendor">{d.vendor}</span> : null}

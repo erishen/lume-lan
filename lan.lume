@@ -41,5 +41,10 @@ get "/api/router", (req) => {
   return lantbl.router_payload();
 };
 
+// 每设备流量历史({ip: 近 5h 累计序列})——惰性单独端点, 前端点选设备看它自己曲线。
+get "/api/router-traffic", (req) => {
+  return lantbl.router_traffic_payload();
+};
+
 // 注册窗口关闭,开始伺服(与 crm.lume 同款——server{} 定义好路由后必须显式 run())。
 run();

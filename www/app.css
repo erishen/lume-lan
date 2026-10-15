@@ -72,25 +72,26 @@ nav.top .home-link { margin-left: auto; font-size: 0.9rem; }
 }
 .banner.warn { background: rgba(217, 119, 6, 0.12); color: #92400e; }
 
-/* 工具条 */
+/* 工具条：单行不折行(搜索收缩 + 提示 ellipsis)，「只看在线」/筛选/刷新 稳定待在第一行 */
 .toolbar {
   display: flex;
   align-items: center;
   gap: 10px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   margin-bottom: 10px;
 }
 .toolbar input {
-  flex: 1 1 180px;
-  min-width: 160px;
+  flex: 1 1 140px;
+  min-width: 120px;
   padding: 6px 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   font: inherit;
 }
-.toolbar .chk { display: inline-flex; align-items: center; gap: 6px; font-size: 0.9rem; color: var(--muted); }
-.toolbar .spacer { flex: 0 0 auto; }
-.toolbar .hint { font-size: 0.82rem; color: var(--muted); }
+.toolbar .chk { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; font-size: 0.9rem; color: var(--muted); white-space: nowrap; }
+.toolbar .spacer { flex: 1 0 0; min-width: 4px; }
+.toolbar .hint { flex: 0 1 auto; min-width: 0; font-size: 0.82rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toolbar .btn { flex: 0 0 auto; }
 /* 工具栏「激活筛选」指示器(类型/频段 chip 选中后显示, 可一键清除) */
 .filter-active {
   cursor: pointer; font: inherit; font-size: 0.78rem; color: var(--accent);
@@ -245,4 +246,6 @@ footer.foot { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--l
 
 @media (max-width: 720px) {
   .kpis { grid-template-columns: repeat(2, 1fr); }
+  /* 窄屏一行放不下, 允许工具条折行兜底(避免溢出) */
+  .toolbar { flex-wrap: wrap; }
 }

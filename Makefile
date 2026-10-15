@@ -31,7 +31,7 @@ DOCKER_PORT ?= 10091
 DOCKER_IMAGE ?= lume-lan
 LUME_VERSION ?= v0.6.3
 LUME_REPO    ?= erishen/lume
-# 路由器地址默认值(docker 目标注入容器; 覆盖: make dc ROUTER_HOST=...)。
+# 路由器地址默认值(docker 目标注入容器; 覆盖: make docker-run ROUTER_HOST=...)。
 ROUTER_HOST  ?= 192.168.3.1
 PY        ?= /usr/bin/python3
 
@@ -125,8 +125,8 @@ docker-build-multiarch:
 		--build-arg LUME_VERSION=$(LUME_VERSION) -t $(DOCKER_IMAGE) .
 
 # 前台起容器(宿主 http://127.0.0.1:$(DOCKER_PORT))。Ctrl-C 停。先宿主出 .data/。
-# 传 ROUTER_PASS 才注入凭据(make 变量展开, 不进镜像): make dc ROUTER_PASS='...'
-dc: scan router-fetch
+# 传 ROUTER_PASS 才注入凭据(make 变量展开, 不进镜像): make docker-run ROUTER_PASS='...'
+docker-run: scan router-fetch
 	@echo "▶ http://127.0.0.1:$(DOCKER_PORT)/  (宿主:$(DOCKER_PORT) → 容器:8091; .data/ 已挂载)"
 	@if [ -n "$(ROUTER_PASS)" ]; then \
 		docker run --rm -p $(DOCKER_PORT):8091 -v $$(pwd)/.data:/app/.data \
@@ -136,18 +136,18 @@ dc: scan router-fetch
 			-e ROUTER_HOST="$(ROUTER_HOST)" $(DOCKER_IMAGE); \
 	fi
 
-# 后台起 / 停。用固定容器名, 便于 make stop-docker 清理。
-dc-up:
+# 后台起 / 停。用固定容器名, 便于 make docker-down 清理。
+docker-up:
 	@echo "▶ 后台起 $(DOCKER_IMAGE) → http://127.0.0.1:$(DOCKER_PORT)/"
 	@docker rm -f lan-lan 2>/dev/null || true
 	@docker run -d --name lan-lan -p $(DOCKER_PORT):8091 -v $$(pwd)/.data:/app/.data \
 		-e ROUTER_HOST="$(ROUTER_HOST)" $(DOCKER_IMAGE)
 
-dc-down:
+docker-down:
 	@docker stop lan-lan 2>/dev/null && docker rm lan-lan 2>/dev/null || true
 	@echo "已停并删除容器 lan-lan"
 
-# compose 方式(等价于 dc-up, 走 docker-compose.yml)。DOCKER_PORT 经 env 传入。
+# compose 方式(等价于 docker-up, 走 docker-compose.yml)。DOCKER_PORT 经 env 传入。
 docker-compose:
 	@DOCKER_PORT=$(DOCKER_PORT) docker compose up -d
 
@@ -155,4 +155,4 @@ docker-compose-down:
 	@docker compose down
 
 .PHONY: default dev lan lan-dev stop scan scan-sweep check ui watch router-fetch \
-         docker-fetch docker-build docker-build-multiarch dc dc-up dc-down docker-compose docker-compose-down
+         docker-fetch docker-build docker-build-multiarch docker-run docker-up docker-down docker-compose docker-compose-down

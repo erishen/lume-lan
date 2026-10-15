@@ -101,21 +101,23 @@ make ui            # 一次性构建前端（esbuild → www/app.js，非 watch�
   Docker Desktop 默认 NAT / Linux `network_mode: host`）需能直连 `ROUTER_HOST`。
 
 ```
-docker build -t lume-lan .
-docker run --rm -p 8091:8091 -v $PWD/.data:/app/.data lume-lan
-#   → http://127.0.0.1:8091
+make docker-build                 # 宿主预下载 Lume 二进制到 vendor/ 后打镜像
+make docker-run                   # 前台起 → http://127.0.0.1:10091/ (Ctrl-C 停)
+#   或后台: make docker-up   /   make docker-down
 ```
 
-或用 `docker-compose.yml`（把 `ROUTER_PASS` 走 env 注入，不进镜像）：
+或用 `docker-compose.yml`（`ROUTER_PASS` 走 env 注入，不落盘）：
 
 ```
-make scan; make router-fetch        # 宿主先出 .data/ 快照
-export ROUTER_PASS='...'            # 供 compose 读, 不落盘
-docker compose up -d              # REFRESH=1 时容器内每 60s 自刷路由器; 默认 0 只 serve
+export ROUTER_PASS='...'          # 供 compose 读, 不进镜像
+make docker-compose               # 起 → http://127.0.0.1:10091/
+make docker-compose-down          # 停
 ```
 
-- 多架构：`docker buildx build --platform linux/arm64,linux/amd64 -t lume-lan .`
-  （Apple Silicon 的 Docker Desktop 默认 arm64，`docker build` 会自动取对应二进制）。
+宿主侧发布端口默认 `DOCKER_PORT=10091`（>10000，避开本地 `make dev` 的 8091）；容器内 Lume 仍绑 8091。
+覆盖：`make docker-run DOCKER_PORT=11091`。
+
+- 多架构：`make docker-build-multiarch`（vendor/ 需同时含两种 arch）。
 - 静态版全静态链接，仍基于 `python:3.12-slim`（容器内刷新循环要 python3），非 `scratch`。
 
 ## 路由器层（识别「设备使用情况」）

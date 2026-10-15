@@ -125,9 +125,9 @@ function Dashboard(): React.ReactElement {
   }, [data, router, kw, onlyLive, ipNames]);
 
   /* KPI:路由器登录态可用时以 HostInfo 的全网口径为准(32 台在册/8 台在线),
-   * 否则退回 ARP 本机口径。 */
-  const deviceTotal = router?.login_ok ? (router.router_count ?? data.count) : data.count;
-  const onlineTotal = router?.login_ok ? (router.router_online ?? data.live_count) : data.live_count;
+   * 否则退回 ARP 本机口径。data 未加载(初值为 null)时给 0,避免读 null.count 崩溃。 */
+  const deviceTotal = !data ? 0 : router?.login_ok ? (router.router_count ?? data.count) : data.count;
+  const onlineTotal = !data ? 0 : router?.login_ok ? (router.router_online ?? data.live_count) : data.live_count;
 
   /* 路由器终端流量 Top 5(按累计下载排序,数据已按该序下发)。 */
   const top5 = React.useMemo(() => {

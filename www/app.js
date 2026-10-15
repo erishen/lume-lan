@@ -24616,8 +24616,8 @@ function Dashboard() {
       return d.ip.toLowerCase().includes(k) || (d.mac || "").toLowerCase().includes(k) || (d.iface || "").toLowerCase().includes(k) || name.includes(k);
     });
   }, [data, router, kw, onlyLive, ipNames]);
-  const deviceTotal = router?.login_ok ? router.router_count ?? data.count : data.count;
-  const onlineTotal = router?.login_ok ? router.router_online ?? data.live_count : data.live_count;
+  const deviceTotal = !data ? 0 : router?.login_ok ? router.router_count ?? data.count : data.count;
+  const onlineTotal = !data ? 0 : router?.login_ok ? router.router_online ?? data.live_count : data.live_count;
   const top5 = import_react.default.useMemo(() => {
     if (!router || !router.router_devices) return [];
     const list = [...router.router_devices].sort((a, b) => (b.rx_bytes ?? 0) - (a.rx_bytes ?? 0));

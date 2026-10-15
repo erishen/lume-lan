@@ -5,6 +5,21 @@ Lume（C 语言实现的 DSL 解释器）+ React 搭的一个局域网设备看�
 
 照 `lume-crm` 的范式（`.lume` 服务端 + esbuild 打 React 进 `www/` + Makefile 串联）搭的。
 
+## 能展示什么
+
+| 区 | 内容 | 数据源 |
+|---|---|---|
+| KPI | 设备总数 / 在线数（全网口径）/ 网关 / 快照 | arp + 路由器 |
+| 路由器区 | 型号 / SN / OUI | 免密 `/api/system/deviceinfo` |
+| 流量趋势曲线 | 家庭总流量随时间变化（每 60s 采样，300 点 ≈ 5h），**峰值时刻 + 主因设备**（谁在吃带宽） | `router_fetch.py` 累计流量历史差分 |
+| 设备类型分布 | 手机 / 笔记本 / 电脑 / 电视 / 平板 / Android（**chip 可点击筛选**） | 路由器 `IconType` |
+| Wi-Fi 频段分布 | 5GHz / 2.4GHz（**chip 可点击筛选**） | 路由器 `Frequency` |
+| 流量排行 Top5 | 累计下载 Top5 条形图 + 近 1h 平均速率 + 活跃/挂起标签 | `HostInfo` + 流量历史 |
+| 完整终端列表 | 在线/挂起中/离线三态 + 活跃/挂起标签 + 你的设备备注（终端管理页改的名自动同步） | `HostInfo` |
+| 设备表 | 本机 ARP + 路由器在线合并，设备名按 IP 关联，搜索框可搜 IP/设备名/MAC/网卡 | `arp -a` + `HostInfo` |
+
+「设备类型」「Wi-Fi 频段」两行的 chip 现在是**筛选器**：点一下只看该类/该频段的设备，再点取消；工具栏会显示当前激活的筛选（可一键清除）。
+
 ## 架构
 
 ```
@@ -84,9 +99,14 @@ make ui            # 一次性构建前端（esbuild → www/app.js，非 watch�
 
 ## 限制
 
-- 数据是**快照**（`make scan` / `make router-fetch` 的一次抓取结果），非实时流。
-  浏览器「刷新」只重拉 Lume 已下发的快照；要新数据先宿主重跑对应 make 目标。
+- `make dev` 会起一个**后台数据刷新循环**（默认每 `REFRESH_SECS=60` 秒重跑
+  `scan` + `router-fetch`，写 `.runtime/refresh.pid`，`make stop` 清理），所以日常开发时
+  数据是「近一次循环」的准实时快照。只起 Lume（不跑 `make dev`）时，刷新按钮只重读上次落盘的快照。
+- 流量趋势 / 平均速率 / 活跃-挂起判定都依赖**累积的历史**（`.data/router_traffic_hist*.json`），
+  刚部署或历史被清后要等数据循环跑满 10 分钟才有基线，期间增量按「未知」处理、不误判。
+- 登录限流（`Too_Many_user`）后，`router_fetch.py` 有 5 分钟冷却：冷却/沿用旧数据时
+  **不往流量历史写点**（避免趋势图出现假的"流量=0"平线），界面用「沿用上次的终端数据」提示。
 - `route get default` 在受限环境（如某些沙箱）会被 OS 拦，脚本兜底从
   `arp -a` 的 ifscope 条目取网关；仍拿不到才回落 `10.0.0.1`。
-- Lume 无 exec 内置：所有系统调用（arp/ping/curl 路由器）都在宿主脚本里做，
+- Lume 无 exec 内置：所有系统调用（arp/ping/登录路由器）都在宿主脚本里做，
   Lume 侧只读 JSON 快照出 API。

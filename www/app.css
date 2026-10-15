@@ -91,6 +91,14 @@ nav.top .home-link { margin-left: auto; font-size: 0.9rem; }
 .toolbar .chk { display: inline-flex; align-items: center; gap: 6px; font-size: 0.9rem; color: var(--muted); }
 .toolbar .spacer { flex: 0 0 auto; }
 .toolbar .hint { font-size: 0.82rem; color: var(--muted); }
+/* 工具栏「激活筛选」指示器(类型/频段 chip 选中后显示, 可一键清除) */
+.filter-active {
+  cursor: pointer; font: inherit; font-size: 0.78rem; color: var(--accent);
+  background: rgba(37, 99, 235, 0.1); border: 1px solid rgba(37, 99, 235, 0.3);
+  border-radius: 6px; padding: 3px 8px; margin: 0 6px; display: inline-flex; align-items: center; gap: 6px;
+}
+.filter-active:hover { background: rgba(37, 99, 235, 0.18); }
+.filter-clear { font-size: 0.7rem; opacity: 0.7; }
 .btn {
   cursor: pointer;
   padding: 5px 14px;
@@ -203,6 +211,12 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .rtrdist-chip { font-size: 0.75rem; padding: 2px 8px; border-radius: 6px; background: rgba(120, 130, 150, 0.12); color: var(--fg); }
 .rtrdist-chip.g5 { background: rgba(22, 163, 74, 0.14); color: var(--ok); }
 .rtrdist-chip.g24 { background: rgba(37, 99, 235, 0.14); color: var(--accent); }
+/* chip 可点击(设备类型/Wi-Fi 频段筛选器): 选中态高亮, 再点取消 */
+.rtrdist-btn { cursor: pointer; font: inherit; border: 1px solid transparent; transition: all .15s; }
+.rtrdist-btn:hover { border-color: var(--line); }
+.rtrdist-btn.sel { outline: 2px solid var(--accent); outline-offset: 1px; font-weight: 700; }
+.rtrdist-btn.sel.g5 { background: var(--ok); color: #fff; }
+.rtrdist-btn.sel.g24 { background: var(--accent); color: #fff; }
 
 /* 完整终端列表：开关 + 行内字段 + 在线点 */
 .rtrdevs-toggle {

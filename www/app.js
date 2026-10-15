@@ -24608,6 +24608,8 @@ function Dashboard() {
   const [err, setErr] = import_react.default.useState("");
   const [kw, setKw] = import_react.default.useState("");
   const [onlyLive, setOnlyLive] = import_react.default.useState(false);
+  const [typeFilter, setTypeFilter] = import_react.default.useState("");
+  const [freqFilter, setFreqFilter] = import_react.default.useState("");
   const [lastFetch, setLastFetch] = import_react.default.useState(0);
   const load = import_react.default.useCallback(async () => {
     setErr("");
@@ -24634,6 +24636,20 @@ function Dashboard() {
     }
     return m;
   }, [router]);
+  const ipType = import_react.default.useMemo(() => {
+    const m = /* @__PURE__ */ new Map();
+    router?.router_devices?.forEach((d) => {
+      if (d.ip && d.icon) m.set(d.ip, d.icon);
+    });
+    return m;
+  }, [router]);
+  const ipFreq = import_react.default.useMemo(() => {
+    const m = /* @__PURE__ */ new Map();
+    router?.router_devices?.forEach((d) => {
+      if (d.ip && d.freq) m.set(d.ip, d.freq);
+    });
+    return m;
+  }, [router]);
   const shown = import_react.default.useMemo(() => {
     if (!data) return [];
     const list = [...data.devices];
@@ -24655,11 +24671,13 @@ function Dashboard() {
     const k = kw.trim().toLowerCase();
     return list.filter((d) => {
       if (onlyLive && d.live === false) return false;
+      if (typeFilter && ipType.get(d.ip) !== typeFilter) return false;
+      if (freqFilter && ipFreq.get(d.ip) !== freqFilter) return false;
       if (!k) return true;
       const name = (ipNames.get(d.ip) || "").toLowerCase();
       return d.ip.toLowerCase().includes(k) || (d.mac || "").toLowerCase().includes(k) || (d.iface || "").toLowerCase().includes(k) || name.includes(k);
     });
-  }, [data, router, kw, onlyLive, ipNames]);
+  }, [data, router, kw, onlyLive, typeFilter, freqFilter, ipNames, ipType, ipFreq]);
   const hasRtrData = !!(router?.router_devices && router.router_devices.length > 0);
   const deviceTotal = !data ? 0 : hasRtrData ? router.router_count ?? data.count : data.count;
   const onlineTotal = !data ? 0 : hasRtrData ? router.router_online ?? data.live_count : data.live_count;
@@ -24682,7 +24700,7 @@ function Dashboard() {
     router?.router_devices?.forEach((d) => {
       if (d.icon) m.set(d.icon, (m.get(d.icon) || 0) + 1);
     });
-    return [...m.entries()].map(([k, n]) => ({ label: labelOf[k] || k, n })).sort((a, b) => b.n - a.n);
+    return [...m.entries()].map(([k, n]) => ({ key: k, label: labelOf[k] || k, n })).sort((a, b) => b.n - a.n);
   }, [router]);
   const freqDist = import_react.default.useMemo(() => {
     const m = /* @__PURE__ */ new Map();
@@ -24767,19 +24785,39 @@ function Dashboard() {
         typeDist.length > 0 || freqDist.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrdist", children: [
           typeDist.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrdist-row", children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdist-label", children: "\u8BBE\u5907\u7C7B\u578B" }),
-            typeDist.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "rtrdist-chip", children: [
-              t.label,
-              " ",
-              t.n
-            ] }, t.label))
+            typeDist.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+              "button",
+              {
+                type: "button",
+                className: "rtrdist-chip rtrdist-btn" + (typeFilter === t.key ? " sel" : ""),
+                onClick: () => setTypeFilter(typeFilter === t.key ? "" : t.key),
+                title: typeFilter === t.key ? "\u53D6\u6D88\u7B5B\u9009" : "\u53EA\u770B" + t.label,
+                children: [
+                  t.label,
+                  " ",
+                  t.n
+                ]
+              },
+              t.key
+            ))
           ] }) : null,
           freqDist.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrdist-row", children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdist-label", children: "Wi-Fi \u9891\u6BB5" }),
-            freqDist.map(([f, n]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "rtrdist-chip" + (f.indexOf("5G") === 0 ? " g5" : " g24"), children: [
-              f,
-              " ",
-              n
-            ] }, f))
+            freqDist.map(([f, n]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+              "button",
+              {
+                type: "button",
+                className: "rtrdist-chip rtrdist-btn" + (f.indexOf("5G") === 0 ? " g5" : " g24") + (freqFilter === f ? " sel" : ""),
+                onClick: () => setFreqFilter(freqFilter === f ? "" : f),
+                title: freqFilter === f ? "\u53D6\u6D88\u7B5B\u9009" : "\u53EA\u770B" + f,
+                children: [
+                  f,
+                  " ",
+                  n
+                ]
+              },
+              f
+            ))
           ] }) : null
         ] }) : null,
         top5.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrtop", children: [
@@ -24853,6 +24891,24 @@ function Dashboard() {
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: onlyLive, onChange: (e) => setOnlyLive(e.target.checked) }),
           "\u53EA\u770B\u5728\u7EBF"
         ] }),
+        typeFilter || freqFilter ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+          "button",
+          {
+            type: "button",
+            className: "filter-active",
+            onClick: () => {
+              setTypeFilter("");
+              setFreqFilter("");
+            },
+            title: "\u6E05\u9664\u7B5B\u9009",
+            children: [
+              typeFilter ? "\u7C7B\u578B:" + (typeDist.find((t) => t.key === typeFilter)?.label || typeFilter) : "",
+              typeFilter && freqFilter ? " \xB7 " : "",
+              freqFilter ? "\u9891\u6BB5:" + freqFilter : "",
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "filter-clear", children: "\u2715" })
+            ]
+          }
+        ) : null,
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "spacer" }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "hint", children: [
           "\u5FEB\u7167\u4E8E ",

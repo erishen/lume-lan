@@ -109,6 +109,8 @@ function Dashboard(): React.ReactElement {
   const [err, setErr] = React.useState<string>("");
   const [kw, setKw] = React.useState("");
   const [onlyLive, setOnlyLive] = React.useState(false);
+  const [typeFilter, setTypeFilter] = React.useState("");
+  const [freqFilter, setFreqFilter] = React.useState("");
   const [lastFetch, setLastFetch] = React.useState<number>(0);
 
   const load = React.useCallback(async () => {
@@ -141,6 +143,18 @@ function Dashboard(): React.ReactElement {
     return m;
   }, [router]);
 
+  /* IP → 设备类型(路由器 icon 原始键) / Wi-Fi 频段。供 chip 点击筛选。 */
+  const ipType = React.useMemo(() => {
+    const m = new Map<string, string>();
+    router?.router_devices?.forEach((d) => { if (d.ip && d.icon) m.set(d.ip, d.icon); });
+    return m;
+  }, [router]);
+  const ipFreq = React.useMemo(() => {
+    const m = new Map<string, string>();
+    router?.router_devices?.forEach((d) => { if (d.ip && d.freq) m.set(d.ip, d.freq); });
+    return m;
+  }, [router]);
+
   /* 合并列表:ARP 本机快照 + 路由器在线设备(不在 ARP 表里的补进来, source=router)。
    * 这样「在线设备」不再受限于本机 arp 缓存,而是全网在线都可见。 */
   const shown = React.useMemo(() => {
@@ -165,6 +179,10 @@ function Dashboard(): React.ReactElement {
     const k = kw.trim().toLowerCase();
     return list.filter((d) => {
       if (onlyLive && d.live === false) return false;
+      /* 类型/频段筛选(来自路由器 HostInfo, 独立 AND 条件, 可多选同组内互斥):
+       * 本机 ARP 设备无 icon/freq 元数据, 选中筛选时自然被排除(符合语义)。 */
+      if (typeFilter && ipType.get(d.ip) !== typeFilter) return false;
+      if (freqFilter && ipFreq.get(d.ip) !== freqFilter) return false;
       if (!k) return true;
       const name = (ipNames.get(d.ip) || "").toLowerCase();
       return (
@@ -174,7 +192,7 @@ function Dashboard(): React.ReactElement {
         name.includes(k)
       );
     });
-  }, [data, router, kw, onlyLive, ipNames]);
+  }, [data, router, kw, onlyLive, typeFilter, freqFilter, ipNames, ipType, ipFreq]);
 
   /* KPI:路由器有终端数据时(不管新鲜/stale/冷却)用全网口径(32 在册/8 在线),
    * 否则退回 ARP 本机口径。data 未加载(初值 null)时给 0,避免读 null.count 崩溃。 */
@@ -190,7 +208,8 @@ function Dashboard(): React.ReactElement {
     return list.slice(0, 5).map((d) => ({ d, pct: Math.round(((d.rx_bytes ?? 0) / max) * 100) }));
   }, [router]);
 
-  /* 设备类型分布(路由器 IconType: mobile/laptop/computer/television/tablet/android)。 */
+  /* 设备类型分布(路由器 IconType: mobile/laptop/computer/television/tablet/android)。
+   * 保留原始 icon 键, 供 chip 点击筛选时与 ipType 匹配。 */
   const typeDist = React.useMemo(() => {
     const labelOf: Record<string, string> = {
       mobile: "手机", laptop: "笔记本", computer: "电脑",
@@ -201,7 +220,7 @@ function Dashboard(): React.ReactElement {
       if (d.icon) m.set(d.icon, (m.get(d.icon) || 0) + 1);
     });
     return [...m.entries()]
-      .map(([k, n]) => ({ label: labelOf[k] || k, n }))
+      .map(([k, n]) => ({ key: k, label: labelOf[k] || k, n }))
       .sort((a, b) => b.n - a.n);
   }, [router]);
 
@@ -267,7 +286,13 @@ function Dashboard(): React.ReactElement {
                     <div className="rtrdist-row">
                       <span className="rtrdist-label">设备类型</span>
                       {typeDist.map((t) => (
-                        <span key={t.label} className="rtrdist-chip">{t.label} {t.n}</span>
+                        <button
+                          key={t.key}
+                          type="button"
+                          className={"rtrdist-chip rtrdist-btn" + (typeFilter === t.key ? " sel" : "")}
+                          onClick={() => setTypeFilter(typeFilter === t.key ? "" : t.key)}
+                          title={typeFilter === t.key ? "取消筛选" : "只看" + t.label}
+                        >{t.label} {t.n}</button>
                       ))}
                     </div>
                   ) : null}
@@ -275,7 +300,13 @@ function Dashboard(): React.ReactElement {
                     <div className="rtrdist-row">
                       <span className="rtrdist-label">Wi-Fi 频段</span>
                       {freqDist.map(([f, n]) => (
-                        <span key={f} className={"rtrdist-chip" + (f.indexOf("5G") === 0 ? " g5" : " g24")}>{f} {n}</span>
+                        <button
+                          key={f}
+                          type="button"
+                          className={"rtrdist-chip rtrdist-btn" + (f.indexOf("5G") === 0 ? " g5" : " g24") + (freqFilter === f ? " sel" : "")}
+                          onClick={() => setFreqFilter(freqFilter === f ? "" : f)}
+                          title={freqFilter === f ? "取消筛选" : "只看" + f}
+                        >{f} {n}</button>
                       ))}
                     </div>
                   ) : null}
@@ -347,6 +378,19 @@ function Dashboard(): React.ReactElement {
               placeholder="搜 IP / 设备名 / MAC / 网卡…"
             />
             <label className="chk"><input type="checkbox" checked={onlyLive} onChange={(e) => setOnlyLive(e.target.checked)} />只看在线</label>
+            {(typeFilter || freqFilter) ? (
+              <button
+                type="button"
+                className="filter-active"
+                onClick={() => { setTypeFilter(""); setFreqFilter(""); }}
+                title="清除筛选"
+              >
+                {typeFilter ? ("类型:" + (typeDist.find((t) => t.key === typeFilter)?.label || typeFilter)) : ""}
+                {typeFilter && freqFilter ? " · " : ""}
+                {freqFilter ? ("频段:" + freqFilter) : ""}
+                <span className="filter-clear">✕</span>
+              </button>
+            ) : null}
             <span className="spacer" />
             <span className="hint">快照于 {fmtTs(data.scanned_at)} · 宿主 <code>make scan</code> 刷新数据源</span>
             <button className="btn" onClick={() => void load()}>刷新</button>

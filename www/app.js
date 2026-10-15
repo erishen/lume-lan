@@ -24594,9 +24594,10 @@ function Dashboard() {
   const shown = import_react.default.useMemo(() => {
     if (!data) return [];
     const list = [...data.devices];
-    if (router?.login_ok && router.router_devices) {
+    const rdevs = router?.router_devices;
+    if (rdevs && rdevs.length > 0) {
       const arpIps = new Set(list.map((d) => d.ip));
-      for (const rd of router.router_devices) {
+      for (const rd of rdevs) {
         if (!rd.online || !rd.ip || arpIps.has(rd.ip)) continue;
         list.push({
           ip: rd.ip,
@@ -24616,8 +24617,9 @@ function Dashboard() {
       return d.ip.toLowerCase().includes(k) || (d.mac || "").toLowerCase().includes(k) || (d.iface || "").toLowerCase().includes(k) || name.includes(k);
     });
   }, [data, router, kw, onlyLive, ipNames]);
-  const deviceTotal = !data ? 0 : router?.login_ok ? router.router_count ?? data.count : data.count;
-  const onlineTotal = !data ? 0 : router?.login_ok ? router.router_online ?? data.live_count : data.live_count;
+  const hasRtrData = !!(router?.router_devices && router.router_devices.length > 0);
+  const deviceTotal = !data ? 0 : hasRtrData ? router.router_count ?? data.count : data.count;
+  const onlineTotal = !data ? 0 : hasRtrData ? router.router_online ?? data.live_count : data.live_count;
   const top5 = import_react.default.useMemo(() => {
     if (!router || !router.router_devices) return [];
     const list = [...router.router_devices].sort((a, b) => (b.rx_bytes ?? 0) - (a.rx_bytes ?? 0));
@@ -24631,12 +24633,12 @@ function Dashboard() {
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "kpi", children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "k", children: "\u8BBE\u5907" }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "v", children: deviceTotal }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "u", children: router?.login_ok ? "\u53F0\u5728\u518C(\u5168\u7F51)" : "\u53F0\u5728\u518C(\u672C\u673A)" })
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "u", children: hasRtrData ? "\u53F0\u5728\u518C(\u5168\u7F51)" : "\u53F0\u5728\u518C(\u672C\u673A)" })
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "kpi ok", children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "k", children: "\u5728\u7EBF" }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "v", children: onlineTotal }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "u", children: router?.login_ok ? "live=true(\u5168\u7F51)" : "live=true(\u672C\u673A)" })
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "u", children: hasRtrData ? "live=true(\u5168\u7F51)" : "live=true(\u672C\u673A)" })
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "kpi", children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "k", children: "\u7F51\u5173" }),

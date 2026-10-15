@@ -96,9 +96,11 @@ function Dashboard(): React.ReactElement {
   const shown = React.useMemo(() => {
     if (!data) return [];
     const list = [...data.devices];
-    if (router?.login_ok && router.router_devices) {
+    /* 只要路由器有终端数据(不管登录态是新鲜还是 stale/冷却)就合并。 */
+    const rdevs = router?.router_devices;
+    if (rdevs && rdevs.length > 0) {
       const arpIps = new Set(list.map((d) => d.ip));
-      for (const rd of router.router_devices) {
+      for (const rd of rdevs) {
         if (!rd.online || !rd.ip || arpIps.has(rd.ip)) continue;
         list.push({
           ip: rd.ip,
@@ -124,10 +126,11 @@ function Dashboard(): React.ReactElement {
     });
   }, [data, router, kw, onlyLive, ipNames]);
 
-  /* KPI:路由器登录态可用时以 HostInfo 的全网口径为准(32 台在册/8 台在线),
-   * 否则退回 ARP 本机口径。data 未加载(初值为 null)时给 0,避免读 null.count 崩溃。 */
-  const deviceTotal = !data ? 0 : router?.login_ok ? (router.router_count ?? data.count) : data.count;
-  const onlineTotal = !data ? 0 : router?.login_ok ? (router.router_online ?? data.live_count) : data.live_count;
+  /* KPI:路由器有终端数据时(不管新鲜/stale/冷却)用全网口径(32 在册/8 在线),
+   * 否则退回 ARP 本机口径。data 未加载(初值 null)时给 0,避免读 null.count 崩溃。 */
+  const hasRtrData = !!(router?.router_devices && router.router_devices.length > 0);
+  const deviceTotal = !data ? 0 : hasRtrData ? (router.router_count ?? data.count) : data.count;
+  const onlineTotal = !data ? 0 : hasRtrData ? (router.router_online ?? data.live_count) : data.live_count;
 
   /* 路由器终端流量 Top 5(按累计下载排序,数据已按该序下发)。 */
   const top5 = React.useMemo(() => {
@@ -143,8 +146,8 @@ function Dashboard(): React.ReactElement {
       {data && !data.missing ? (
         <>
           <div className="kpis">
-            <div className="kpi"><div className="k">设备</div><div className="v">{deviceTotal}</div><div className="u">{router?.login_ok ? "台在册(全网)" : "台在册(本机)"}</div></div>
-            <div className="kpi ok"><div className="k">在线</div><div className="v">{onlineTotal}</div><div className="u">{router?.login_ok ? "live=true(全网)" : "live=true(本机)"}</div></div>
+            <div className="kpi"><div className="k">设备</div><div className="v">{deviceTotal}</div><div className="u">{hasRtrData ? "台在册(全网)" : "台在册(本机)"}</div></div>
+            <div className="kpi ok"><div className="k">在线</div><div className="v">{onlineTotal}</div><div className="u">{hasRtrData ? "live=true(全网)" : "live=true(本机)"}</div></div>
             <div className="kpi"><div className="k">网关</div><div className="v small">{data.gateway || "—"}</div><div className="u">{data.subnet}</div></div>
             <div className="kpi"><div className="k">快照</div><div className="v small">{fmtAge(data.scanned_at)}</div><div className="u">{data.sweep ? "含 ping sweep" : "仅 arp 表"}</div></div>
           </div>

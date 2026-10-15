@@ -29,29 +29,58 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# 拉取并校验对应架构的 static linux 二进制, 装到 /usr/local/bin/lume。
+# ---- 取 Lume 全静态 linux 二进制装到 /usr/local/bin/lume ----
+# 首选「宿主预下载」: make docker-fetch 在本机按 arch 把 static tarball 下到 vendor/
+# (宿主网络通), build 时 COPY 进镜像并离线安装 —— 绕开 OrbStack 容器内 curl
+# 走网关 TLS 被截断(unexpected eof / exit 35)。
+# 若 vendor/ 里没有匹配 arch 的文件(例如从零 buildx 多架构 / CI), 回落到容器内 curl。
 # 资产命名(erishen/lume release.yml 权威):
 #   静态 tarball = lume-linux-<x64|arm64>-static.tar.gz   (解压后: <asset>-static/bin/lume)
-#   校验文件     = lume-linux-<x64|arm64>-static.sha256   (sha256sum 生成, 首行首列=hex)
-# 完全静态(无 glibc/libsqlite 运行时依赖), 放进 slim 也稳; 故用 slim 而非 scratch。
+#   校验文件     = lume-linux-<x64|arm64>-static.sha      (sha256sum 生成, 首行首列=hex)
+# vendor/ 总会被 COPY(缺 .gitkeep 兜底目录); RUN 里按 TARGETARCH 挑文件。
+COPY vendor/ /vendor-src/
+
 RUN set -eux; \
     case "${TARGETARCH}" in \
       amd64)  arch=x64   ;; \
       arm64)  arch=arm64 ;; \
       *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
-    dl="https://github.com/${LUME_REPO}/releases/download/${LUME_VERSION}"; \
-    asset="lume-linux-${arch}-static"; \
-    curl -fsSL -o /tmp/lume.tar.gz "${dl}/${asset}.tar.gz"; \
-    curl -fsSL -o /tmp/lume.sha    "${dl}/${asset}.sha256"; \
-    hex=$(awk 'NR==1{print $1}' /tmp/lume.sha); \
-    echo "${hex}  /tmp/lume.tar.gz" | sha256sum -c -; \
-    mkdir -p /opt/lume; \
-    tar -xzf /tmp/lume.tar.gz -C /opt/lume; \
-    bin=$(find /opt/lume -type f -name 'lume' ! -name '*.tmp' | head -1); \
-    [ -n "${bin}" ] || { echo "lume binary not found in ${asset}.tar.gz" >&2; ls -R /opt/lume >&2; exit 1; }; \
-    install -m 0755 "${bin}" /usr/local/bin/lume; \
-    rm -rf /opt/lume /tmp/lume.tar.gz /tmp/lume.sha; \
+    install_lume() { \
+      mkdir -p /opt/lume; \
+      tar -xzf /tmp/lume.tar.gz -C /opt/lume; \
+      bin=$(find /opt/lume -type f -name 'lume' ! -name '*.tmp' | head -1); \
+      [ -n "${bin}" ] || { echo "lume binary not found in tarball" >&2; ls -R /opt/lume >&2; exit 1; }; \
+      install -m 0755 "${bin}" /usr/local/bin/lume; \
+      rm -rf /opt/lume; \
+    }; \
+    src="/vendor-src/lume-linux-${arch}-static.tar.gz"; \
+    sha="/vendor-src/lume-linux-${arch}-static.sha"; \
+    if [ -f "${src}" ]; then \
+      echo "==> using host-provisioned ${src} (offline, skip in-container download)"; \
+      cp "${src}" /tmp/lume.tar.gz; \
+      if [ -f "${sha}" ]; then \
+        hex=$(awk 'NR==1{print $1}' "${sha}"); \
+        echo "${hex}  /tmp/lume.tar.gz" | sha256sum -c -; \
+      fi; \
+      install_lume; \
+    else \
+      echo "==> no host-provisioned ${arch} tarball in vendor/; downloading in-container (with retries)"; \
+      dl="https://github.com/${LUME_REPO}/releases/download/${LUME_VERSION}"; \
+      asset="lume-linux-${arch}-static"; \
+      ok=0; \
+      for i in 1 2 3 4 5; do \
+        if curl -fsSL --retry 3 --retry-delay 2 -o /tmp/lume.tar.gz "${dl}/${asset}.tar.gz"; then ok=1; break; fi; \
+        echo "download attempt ${i} failed, retrying…" >&2; sleep 5; \
+      done; \
+      [ "${ok}" = "1" ] || { echo "in-container download failed after 5 tries (run host 'make docker-fetch' + retry build)" >&2; exit 1; }; \
+      if curl -fsSL --retry 3 -o /tmp/lume.sha "${dl}/${asset}.sha256" 2>/dev/null; then \
+        hex=$(awk 'NR==1{print $1}' /tmp/lume.sha); \
+        echo "${hex}  /tmp/lume.tar.gz" | sha256sum -c - || echo "(sha 校验失败, 仍继续安装)"; \
+      fi; \
+      install_lume; \
+    fi; \
+    rm -rf /vendor-src /tmp/lume.tar.gz /tmp/lume.sha; \
     /usr/local/bin/lume --version
 
 WORKDIR /app

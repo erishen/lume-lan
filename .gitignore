@@ -14,6 +14,12 @@ logs/
 node_modules
 node_modules/
 
+# ---- Docker 宿主预下载的 Lume 全静态二进制 ----
+# vendor/ 放多架构 tarball+sha（大文件不入库，make docker-fetch 重新生成）。
+# 保留 .gitkeep 让目录进仓（Dockerfile 的 COPY vendor/ 需要目录存在）。
+vendor/*
+!vendor/.gitkeep
+
 # ---- 有意跟踪 ----
 # .env.example（无密码模板）与 www/app.js（esbuild 产物,Lume 直接 serve,免宿主 build）
 # 二者都要进仓,若被上面某条误伤请用 ! 显式放行:

@@ -30,6 +30,7 @@ DOCKER_PORT ?= 10091
 # 镜像名 / Lume 版本(与 Dockerfile 的 ARG 一致)。
 DOCKER_IMAGE ?= lume-lan
 LUME_VERSION ?= v0.6.3
+LUME_REPO    ?= erishen/lume
 # 路由器地址默认值(docker 目标注入容器; 覆盖: make dc ROUTER_HOST=...)。
 ROUTER_HOST  ?= 192.168.3.1
 PY        ?= /usr/bin/python3
@@ -101,10 +102,21 @@ lan-dev: dev
 # 容器内 Lume 固定绑 8091; 宿主侧映射 DOCKER_PORT(默认 10091)。arp 快照靠宿主 make scan
 # 写进 .data/, 容器挂载读取; 可选 REFRESH=1 让容器内每 60s 自刷路由器(打 ROUTER_HOST)。
 # 凭据: docker run/compose 时注入 ROUTER_PASS(不进镜像)。
+#
+# Lume 二进制策略(根治 OrbStack 容器内 curl 走网关 TLS 被截断 exit 35):
+#   make docker-fetch  → 宿主按本机 arch 把 static tarball 下到 vendor/(宿主网络通)
+#   docker build       → COPY vendor/ 进镜像, 有匹配 arch 就离线安装, 没有才容器内下载兜底
+#   所以 make docker-build 先依赖 docker-fetch, 本地 arm64 单机 build 全程不用容器内联网。
 
-# 打镜像(自动按本机 arch 取对应 static 二进制)。多架构: 见下方 docker-build-multiarch。
-docker-build:
-	@echo "▶ 打镜像 $(DOCKER_IMAGE)(LUME_VERSION=$(LUME_VERSION))…"
+# 宿主预下载 Lume 全静态 linux 二进制到 vendor/(按本机 arch)。幂等: 已存在且校验和匹配则跳过。
+# 用独立脚本承载下载(脚本里 $1/sha256sum 不经 make recipe 转义, 干净); Makefile 只传 VERSION/REPO。
+docker-fetch:
+	@sh scripts/fetch_lume_vendor.sh "$(LUME_VERSION)" "$(LUME_REPO)"
+
+# 打镜像(先宿主预下载 Lume 二进制, 再 build; build 时 COPY vendor/ 离线安装)。
+# 多架构: 见下方 docker-build-multiarch(它需 vendor/ 同时含两种 arch, 可用 LUME_VERSION 指定)。
+docker-build: docker-fetch
+	@echo "▶ 打镜像 $(DOCKER_IMAGE)(LUME_VERSION=$(LUME_VERSION), 离线用 vendor/)…"
 	@docker build --build-arg LUME_VERSION=$(LUME_VERSION) -t $(DOCKER_IMAGE) .
 
 # 多架构镜像(amd64+arm64)。需先 docker buildx create --use(或已用默认 builder)。
@@ -143,4 +155,4 @@ docker-compose-down:
 	@docker compose down
 
 .PHONY: default dev lan lan-dev stop scan scan-sweep check ui watch router-fetch \
-         docker-build docker-build-multiarch dc dc-up dc-down docker-compose docker-compose-down
+         docker-fetch docker-build docker-build-multiarch dc dc-up dc-down docker-compose docker-compose-down

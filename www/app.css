@@ -276,4 +276,18 @@ footer.foot { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--l
   .kpis { grid-template-columns: repeat(2, 1fr); }
   /* 窄屏一行放不下, 允许工具条折行兜底(避免溢出) */
   .toolbar { flex-wrap: wrap; }
+
+  /* 终端行: 保留 IP/名称/在线点, 隐藏次要字段(厂商/流量/最后活跃/访客), 防横向溢出 */
+  .rtrdev { flex-wrap: wrap; row-gap: 4px; }
+  .rtrdev-vendor, .rtrdev-net, .rtrdev-last, .rtrdev-tag, .rtrdev-state { display: none; }
+  .rtrdev-ip { min-width: auto; }
+
+  /* WAN 卡: 单元格间距收紧 */
+  .wan-grid { gap: 4px 10px; }
+
+  /* 趋势图: 图例说明(中段文字)窄屏隐藏, 只留首尾时间 */
+  .trend-axis span:nth-child(2) { display: none; }
+
+  /* 流量 Top 行: 速率列窄屏隐藏(带宽信息次要) */
+  .rtrtop-rate { display: none; }
 }

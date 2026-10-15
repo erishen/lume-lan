@@ -100,4 +100,9 @@ VOLUME ["/app/.data"]
 
 EXPOSE 8091
 
+# 健康检查: Lume 起来后根路径(或 /api/meta)应 200。docker compose / docker 能据此
+# 标记 unhealthy(容器挂了/端口没起), 编排器可自动重启。curl 已在镜像内。
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -fsS -o /dev/null http://127.0.0.1:8091/ || exit 1
+
 ENTRYPOINT ["/entrypoint.sh"]

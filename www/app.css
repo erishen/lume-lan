@@ -151,6 +151,18 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .routernote { margin-top: 10px; font-size: 0.85rem; color: var(--muted); background: rgba(217, 119, 6, 0.08); border-radius: 8px; padding: 10px 12px; line-height: 1.6; }
 .routernote.dim { background: none; padding: 0; }
 
+/* 登录失败/冷却中的沿用旧数据提示 */
+.rtrstale {
+  margin: 8px 0 0;
+  font-size: 0.8rem;
+  color: #92400e;
+  background: rgba(217, 119, 6, 0.1);
+  border: 1px solid rgba(217, 119, 6, 0.25);
+  border-radius: 8px;
+  padding: 7px 11px;
+  line-height: 1.5;
+}
+
 /* 流量 Top 5 条形图 */
 .rtrtop { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; }
 .rtrtop-title { font-size: 0.85rem; font-weight: 600; margin-bottom: 8px; color: var(--fg); }

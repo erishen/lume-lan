@@ -136,6 +136,11 @@ function Dashboard(): React.ReactElement {
                 {router.manufacturer_oui ? <span className="routermeta">OUI {router.manufacturer_oui}</span> : null}
                 {(router.router_count ?? 0) > 0 ? <span className="routermeta">· {router.router_count} 台终端，在线 {router.router_online ?? "—"}</span> : null}
               </div>
+              {router.login_stale && (router.router_count ?? 0) > 0 ? (
+                <div className="rtrstale">
+                  ⏳ {router.login_stale_note || "本次登录失败/冷却中，以下沿用上次的终端数据"}（自动循环稍后重试，无需操作）
+                </div>
+              ) : null}
               {top5.length > 0 ? (
                 <div className="rtrtop">
                   <div className="rtrtop-title">流量排行（累计下载 Top {top5.length}）</div>
@@ -173,8 +178,9 @@ function Dashboard(): React.ReactElement {
                 </div>
               ) : (
                 <div className="routernote">
-                  登录态终端列表未取到：{router.login_error || "路由器登录失败"}。
-                  请确认 <code>.env</code> 的 <code>ROUTER_PASS</code> 正确后重跑 <code>make router-fetch</code>。
+                  {router.login_stale_note
+                    ? "⏳ " + router.login_stale_note + "（自动循环稍后重试，无需操作）"
+                    : <>登录态终端列表未取到：{router.login_error ? "路由器登录失败" : "无数据"}。确认 <code>.env</code> 的 <code>ROUTER_PASS</code> 正确后重跑 <code>make router-fetch</code>。</>}
                 </div>
               )}
             </div>

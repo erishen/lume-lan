@@ -24651,6 +24651,11 @@ function Dashboard() {
             router.router_online ?? "\u2014"
           ] }) : null
         ] }),
+        router.login_stale && (router.router_count ?? 0) > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrstale", children: [
+          "\u23F3 ",
+          router.login_stale_note || "\u672C\u6B21\u767B\u5F55\u5931\u8D25/\u51B7\u5374\u4E2D\uFF0C\u4EE5\u4E0B\u6CBF\u7528\u4E0A\u6B21\u7684\u7EC8\u7AEF\u6570\u636E",
+          "\uFF08\u81EA\u52A8\u5FAA\u73AF\u7A0D\u540E\u91CD\u8BD5\uFF0C\u65E0\u9700\u64CD\u4F5C\uFF09"
+        ] }) : null,
         top5.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrtop", children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrtop-title", children: [
             "\u6D41\u91CF\u6392\u884C\uFF08\u7D2F\u8BA1\u4E0B\u8F7D Top ",
@@ -24688,17 +24693,17 @@ function Dashboard() {
             d.last_seen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-last", children: d.last_seen.slice(5) }) : null,
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rtrdev-dot" + (d.online ? " on" : "") })
           ] }, d.ip + d.mac))
-        ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "routernote", children: [
+        ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "routernote", children: router.login_stale_note ? "\u23F3 " + router.login_stale_note + "\uFF08\u81EA\u52A8\u5FAA\u73AF\u7A0D\u540E\u91CD\u8BD5\uFF0C\u65E0\u9700\u64CD\u4F5C\uFF09" : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
           "\u767B\u5F55\u6001\u7EC8\u7AEF\u5217\u8868\u672A\u53D6\u5230\uFF1A",
-          router.login_error || "\u8DEF\u7531\u5668\u767B\u5F55\u5931\u8D25",
-          "\u3002 \u8BF7\u786E\u8BA4 ",
+          router.login_error ? "\u8DEF\u7531\u5668\u767B\u5F55\u5931\u8D25" : "\u65E0\u6570\u636E",
+          "\u3002\u786E\u8BA4 ",
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: ".env" }),
           " \u7684 ",
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "ROUTER_PASS" }),
           " \u6B63\u786E\u540E\u91CD\u8DD1 ",
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "make router-fetch" }),
           "\u3002"
-        ] })
+        ] }) })
       ] }) : router && router.note ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "routernote dim", children: router.note }) : null,
       data.stale || data.note ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "banner " + (data.stale ? "warn" : ""), children: data.note }) : null,
       /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "toolbar", children: [

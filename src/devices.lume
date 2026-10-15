@@ -100,6 +100,8 @@ export func router_payload() {
   let router = get(ro, "router", {});
   let rdevs = get(ro, "router_devices", []);
   let login = get(ro, "login", {});
+  let login_stale = get(login, "stale", false);
+  let login_stale_note = get(login, "stale_note", "");
   let online_count = 0;
   for (d in rdevs) {
     if (get(d, "online", false) == true) {
@@ -117,6 +119,8 @@ export func router_payload() {
     terminal_source: get(ro, "terminal_source", ""),
     login_ok: get(login, "ok", false),
     login_error: get(login, "error", ""),
+    login_stale: login_stale,
+    login_stale_note: login_stale_note,
     fetched_at: int(get(router, "fetched_at", 0)),
     router_devices: rdevs,
     router_count: len(rdevs),

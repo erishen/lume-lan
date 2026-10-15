@@ -224,6 +224,45 @@ def extract_hostinfo(payload) -> list:
     return out
 
 
+def _load_last_devices() -> dict:
+    """从 .data/router.json 读上次成功的终端数据（登录失败时沿用它，避免清成空）。"""
+    try:
+        with open(OUT, encoding="utf-8") as f:
+            last = json.load(f)
+        devs = last.get("router_devices")
+        if isinstance(devs, list) and devs:
+            return {"devices": devs, "source": last.get("terminal_source", "")}
+    except Exception:
+        pass
+    return {}
+
+
+_FAIL_TS = os.path.join(ROOT, ".runtime", "router_login_fail_ts")
+LOGIN_COOLDOWN_SECS = 300  # 登录失败后 5min 内跳过尝试(限流冷却期),避免 60s 循环越打锁越紧
+
+
+def _read_fail_ts() -> int:
+    try:
+        return int(open(_FAIL_TS, encoding="utf-8").read().strip())
+    except Exception:
+        return 0
+
+
+def _write_fail_ts(ts: int) -> None:
+    try:
+        os.makedirs(os.path.dirname(_FAIL_TS), exist_ok=True)
+        open(_FAIL_TS, "w", encoding="utf-8").write(str(ts))
+    except Exception:
+        pass
+
+
+def _clear_fail_ts() -> None:
+    try:
+        os.remove(_FAIL_TS)
+    except Exception:
+        pass
+
+
 def main():
     env = load_env()
     host = (env.get("ROUTER_HOST") or "192.168.3.1")
@@ -238,7 +277,24 @@ def main():
     router = fetch_deviceinfo(sess, host, fetched_at, probe)
 
     devices, source, login = [], "", {"ok": False, "level": 0, "error": ""}
-    if pw:
+    stale = False  # 本次是否沿用上次的终端数据
+
+    # 登录冷却: 上次失败后 LOGIN_COOLDOWN_SECS 内不再尝试, 避免 60s 循环把限流锁越打越紧。
+    cooldown = (fetched_at - _read_fail_ts()) < LOGIN_COOLDOWN_SECS
+    if cooldown:
+        wait = LOGIN_COOLDOWN_SECS - (fetched_at - _read_fail_ts())
+        login = {"ok": False, "level": 0, "error": "冷却中"}
+        last = _load_last_devices()
+        if last:
+            devices, source = last["devices"], last.get("source") or "api/system/HostInfo"
+            stale = True
+            login["stale"] = True
+            login["stale_note"] = f"登录冷却中(约 {max(0, wait)//60} 分钟)，沿用上次的终端数据"
+        probe.append({"endpoint": "api/system/user_login", "method": "SKIP",
+                      "auth": "sha256_simple", "status": 0, "ok": False,
+                      "note": f"cooldown, retry in ~{max(0, wait)}s"})
+
+    elif pw:
         login = sess.login(user, pw)
         probe.append({"endpoint": "api/system/user_login", "method": "POST",
                       "auth": "sha256_simple",
@@ -246,6 +302,7 @@ def main():
                       "ok": login["ok"],
                       "note": f"level={login['level']}" if login["ok"] else login["error"]})
         if login["ok"]:
+            _clear_fail_ts()
             code, payload = sess.hostinfo()
             devices = extract_hostinfo(payload)
             source = "api/system/HostInfo"
@@ -253,6 +310,18 @@ def main():
                           "auth": "session", "status": code,
                           "ok": bool(devices),
                           "note": f"{len(devices)} hosts" if devices else f"http={code}"})
+        else:
+            # 登录失败（限流/密码错）：记冷却时间戳 + 保留上次成功的终端数据
+            _write_fail_ts(fetched_at)
+            last = _load_last_devices()
+            if last:
+                devices, source = last["devices"], last.get("source") or "api/system/HostInfo"
+                stale = True
+                login["stale"] = True
+                login["stale_note"] = "本次登录失败，沿用上次的终端列表数据"
+            probe.append({"endpoint": "api/system/user_login", "method": "POST",
+                          "auth": "cooldown-set", "status": 0, "ok": False,
+                          "note": f"失败, {LOGIN_COOLDOWN_SECS}s 内不再尝试"})
     else:
         login = {"ok": False, "level": 0, "error": "未设置 ROUTER_PASS(.env), 跳过登录态抓取"}
         probe.append({"endpoint": "api/system/user_login", "method": "POST",
@@ -262,7 +331,9 @@ def main():
     payload_out = {
         "router": router,
         "login": {"ok": login["ok"], "method": "sha256_simple",
-                  "level": login.get("level", 0), "error": login.get("error", "")},
+                  "level": login.get("level", 0), "error": login.get("error", ""),
+                  "stale": stale,
+                  "stale_note": login.get("stale_note", "")},
         "terminal_source": source,
         "router_devices": devices,
         "probe": probe,
@@ -280,6 +351,8 @@ def main():
         withv = sum(1 for d in devices if d["vendor"])
         print(f"login: ok(level={login.get('level')}) terminal=HostInfo "
               f"hosts={len(devices)} online={on} 有厂商={withv}")
+    elif stale and devices:
+        print(f"login: {login.get('error') or '失败'} → 沿用上次 {len(devices)} 台终端数据")
     else:
         print(f"login: 失败({login.get('error')}) → router_devices 为空, 仅保留身份层")
 

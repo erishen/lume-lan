@@ -60,6 +60,8 @@ export interface RouterPayload {
   terminal_source?: string;
   login_ok?: boolean;
   login_error?: string;
+  login_stale?: boolean;
+  login_stale_note?: string;
   fetched_at?: number;
   router_devices?: RouterDevice[];
   router_count?: number;

@@ -278,6 +278,15 @@ def record_total_traffic(devices: list, fetched_at: int) -> list:
     return hist
 
 
+def _load_total_series() -> list:
+    """只读历史总流量序列(冷却/stale 态用, 不追加旧累计值, 避免污染趋势图)。"""
+    try:
+        s = json.load(open(HIST_TOTAL, encoding="utf-8"))
+        return s if isinstance(s, list) else []
+    except Exception:
+        return []
+
+
 def _load_hist() -> dict:
     """{ip: [{ts, rx, tx}, ...]} 按 ts 升序。"""
     try:
@@ -421,10 +430,14 @@ def main():
                       "auth": "sha256_simple", "status": 0, "ok": False,
                       "note": login["error"]})
 
-    # 计算近 1 小时流量增量(区分 活跃/挂起中), 并把本轮累计值记入历史
-    apply_traffic_deltas(devices, fetched_at)
-    # 家庭总流量序列(全部设备 rx+tx 求和, 每轮一个点) → 前端趋势曲线
-    total_series = record_total_traffic(devices, fetched_at)
+    # 计算近 1 小时流量增量(区分 活跃/挂起中), 并把本轮累计值记入历史。
+    # 仅 fresh 登录成功才追加历史/算增量; 冷却/stale 态沿用上次算好的 delta_1h,
+    # 总流量序列只读不写(旧累计值写进去会让趋势图出现假性平线/回跳)。
+    if login["ok"]:
+        apply_traffic_deltas(devices, fetched_at)
+        total_series = record_total_traffic(devices, fetched_at)
+    else:
+        total_series = _load_total_series()
 
     payload_out = {
         "router": router,

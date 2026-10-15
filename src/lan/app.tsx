@@ -183,6 +183,35 @@ function PerDeviceChart({ device, rows, max, win }: {
   );
 }
 
+/* 单设备详情卡: 点选设备时展示它的全部字段(MAC/厂商/类型/频段/信号/接入方式/
+ * 在线态/最后活跃/累计流量/近 1h 增量/平均速率)。曲线没有历史时这里兜底,
+ * 保证「点一下总能看到这台设备的具体情况」。 */
+function DeviceDetail({ d, name }: { d: RouterDevice; name: string }): React.ReactElement {
+  const typeLabel: Record<string, string> = { mobile: "手机", laptop: "笔记本", computer: "电脑", television: "电视", tablet: "平板", android: "Android" };
+  const cells: [string, React.ReactNode][] = [
+    ["设备名", name || d.mac],
+    ["MAC", <span className="mono">{d.mac || "—"}</span>],
+    ["厂商", d.vendor || "—"],
+    ["类型", d.icon ? (typeLabel[d.icon] || d.icon) : "—"],
+    ["频段", d.freq || "—"],
+    ["信号", d.access_type === "Wireless" ? <Rssi rssi={d.rssi} linkQuality={d.link_quality} /> : d.access_type === "Ethernet" ? "有线" : "—"],
+    ["最后活跃", d.last_seen ? <span className="mono">{d.last_seen.slice(5, 16)}</span> : "—"],
+    ["累计 下载/上传", <span className="mono">↓{fmtBytes(d.rx_bytes)} · ↑{fmtBytes(d.tx_bytes)}</span>],
+    ["近 1h 增量", d.delta_1h !== undefined && d.delta_1h !== null ? <span className="mono">{fmtBytes(d.delta_1h)}（≈{fmtBytes(Math.round(d.delta_1h / 3600))}/s）</span> : "—"],
+    ["状态", d.online ? <span className="det-on">{d.delta_1h !== null && d.delta_1h !== undefined && d.delta_1h >= 1048576 ? "活跃" : "挂起中"}</span> : <span className="det-off">离线</span>],
+  ];
+  return (
+    <div className="devdetail">
+      <div className="dd-title">设备详情 · {name || d.ip}</div>
+      <div className="dd-grid">
+        {cells.map(([k, v], i) => (
+          <div key={i} className="dd-cell"><span className="dd-k">{k}</span><span className="dd-v">{v}</span></div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Dashboard(): React.ReactElement {
   const [data, setData] = React.useState<DevicesPayload | null>(null);
   const [router, setRouter] = React.useState<RouterPayload | null>(null);
@@ -407,6 +436,34 @@ function Dashboard(): React.ReactElement {
       win: { rx: winRx, tx: winTx, spanMin },
     };
   }, [selIp, rtrTraffic, router, ipNames]);
+  /* 点选设备(Top5/终端行)选中它的流量曲线。
+   * 单击: 延迟 260ms 后 toggle; 双击(260ms 内两次): 取消待执行的 toggle, 直接选中。
+   * 这样单击、双击都能选中(双击不再"选中又取消"净消), 点在别的设备上再点才取消。 */
+  const clickTimer = React.useRef<{ t: ReturnType<typeof setTimeout>; ip: string } | null>(null);
+  const selectDevice = React.useCallback((ip: string) => {
+    if (clickTimer.current) {
+      clearTimeout(clickTimer.current.t);
+      if (clickTimer.current.ip === ip) {
+        clickTimer.current = null;
+        setSelIp(ip);               // 双击同设备: 直接选中(不 toggle 掉)
+        return;
+      }
+      clickTimer.current = null;    // 双击了不同设备: 按单击流程处理新的
+    }
+    clickTimer.current = {
+      ip,
+      t: setTimeout(() => {
+        clickTimer.current = null;
+        setSelIp((cur) => (cur === ip ? "" : ip));
+      }, 260),
+    };
+  }, []);
+
+  /* 选中设备的详情(详情卡用, 来自 router_devices 全字段)。 */
+  const selDevice = React.useMemo(() => {
+    if (!selIp) return null;
+    return router?.router_devices?.find((d) => d.ip === selIp) || null;
+  }, [selIp, router]);
   const [showAll, setShowAll] = React.useState(false);
 
   return (
@@ -488,7 +545,7 @@ function Dashboard(): React.ReactElement {
                     <div
                       key={item.d.ip + item.d.mac}
                       className={"rtrtop-row" + (selIp === item.d.ip ? " sel" : " click")}
-                      onClick={() => setSelIp(selIp === item.d.ip ? "" : item.d.ip)}
+                      onClick={() => selectDevice(item.d.ip)}
                       role="button"
                       tabIndex={0}
                     >
@@ -508,8 +565,14 @@ function Dashboard(): React.ReactElement {
                   ))}
                 </div>
               ) : null}
+              {selDevice ? (
+                <DeviceDetail d={selDevice} name={ipNames.get(selDevice.ip) || selDevice.hostname || selDevice.vendor || ""} />
+              ) : null}
               {selChart ? (
                 <PerDeviceChart device={selChart.device} rows={selChart.rows} max={selChart.max} win={selChart.win} />
+              ) : null}
+              {selIp && selDevice && !selChart ? (
+                <div className="routernote dim">该设备暂无流量历史（数据循环刚跑或该设备离线已久），点「刷新」或等 1 个周期再看曲线；上方详情卡已展示它的全部信息。</div>
               ) : null}
               {router.router_devices && router.router_devices.length > 0 ? (
                 <div className="rtrdevs">
@@ -524,7 +587,7 @@ function Dashboard(): React.ReactElement {
                     <div
                       key={d.ip + d.mac}
                       className={"rtrdev " + (d.online ? "" : "off") + (selIp === d.ip ? " sel" : " click")}
-                      onClick={() => setSelIp(selIp === d.ip ? "" : d.ip)}
+                      onClick={() => selectDevice(d.ip)}
                       role="button"
                       tabIndex={0}
                     >

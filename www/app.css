@@ -203,6 +203,16 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .perdev .trend-title b { color: var(--fg); }
 .trendbar.last { background: linear-gradient(180deg, #34d399, var(--ok)); }
 
+/* 单设备详情卡(点选设备后, 曲线上方; 曲线无历史时兜底) */
+.devdetail { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; }
+.dd-title { font-size: 0.85rem; font-weight: 600; margin-bottom: 8px; color: var(--fg); }
+.dd-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px 16px; }
+.dd-cell { display: flex; flex-direction: column; gap: 2px; font-size: 0.85rem; }
+.dd-k { font-size: 0.72rem; color: var(--muted); }
+.dd-v { color: var(--fg); }
+.det-on { color: var(--ok); font-weight: 600; }
+.det-off { color: var(--muted); font-weight: 600; }
+
 /* WAN 状态卡(默认连接/接入方式/IPv4/IPv6/DNS/NAT/带宽峰值) */
 .wancard { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; }
 .wan-title { font-size: 0.82rem; font-weight: 600; color: var(--fg); margin-bottom: 8px; }

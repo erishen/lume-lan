@@ -24701,6 +24701,41 @@ function PerDeviceChart({ device, rows, max, win }) {
     ] })
   ] });
 }
+function DeviceDetail({ d, name }) {
+  const typeLabel = { mobile: "\u624B\u673A", laptop: "\u7B14\u8BB0\u672C", computer: "\u7535\u8111", television: "\u7535\u89C6", tablet: "\u5E73\u677F", android: "Android" };
+  const cells = [
+    ["\u8BBE\u5907\u540D", name || d.mac],
+    ["MAC", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "mono", children: d.mac || "\u2014" })],
+    ["\u5382\u5546", d.vendor || "\u2014"],
+    ["\u7C7B\u578B", d.icon ? typeLabel[d.icon] || d.icon : "\u2014"],
+    ["\u9891\u6BB5", d.freq || "\u2014"],
+    ["\u4FE1\u53F7", d.access_type === "Wireless" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Rssi, { rssi: d.rssi, linkQuality: d.link_quality }) : d.access_type === "Ethernet" ? "\u6709\u7EBF" : "\u2014"],
+    ["\u6700\u540E\u6D3B\u8DC3", d.last_seen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "mono", children: d.last_seen.slice(5, 16) }) : "\u2014"],
+    ["\u7D2F\u8BA1 \u4E0B\u8F7D/\u4E0A\u4F20", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "mono", children: [
+      "\u2193",
+      fmtBytes(d.rx_bytes),
+      " \xB7 \u2191",
+      fmtBytes(d.tx_bytes)
+    ] })],
+    ["\u8FD1 1h \u589E\u91CF", d.delta_1h !== void 0 && d.delta_1h !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "mono", children: [
+      fmtBytes(d.delta_1h),
+      "\uFF08\u2248",
+      fmtBytes(Math.round(d.delta_1h / 3600)),
+      "/s\uFF09"
+    ] }) : "\u2014"],
+    ["\u72B6\u6001", d.online ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "det-on", children: d.delta_1h !== null && d.delta_1h !== void 0 && d.delta_1h >= 1048576 ? "\u6D3B\u8DC3" : "\u6302\u8D77\u4E2D" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "det-off", children: "\u79BB\u7EBF" })]
+  ];
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "devdetail", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dd-title", children: [
+      "\u8BBE\u5907\u8BE6\u60C5 \xB7 ",
+      name || d.ip
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dd-grid", children: cells.map(([k, v], i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dd-cell", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dd-k", children: k }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dd-v", children: v })
+    ] }, i)) })
+  ] });
+}
 function Dashboard() {
   const [data, setData] = import_react.default.useState(null);
   const [router, setRouter] = import_react.default.useState(null);
@@ -24910,6 +24945,29 @@ function Dashboard() {
       win: { rx: winRx, tx: winTx, spanMin }
     };
   }, [selIp, rtrTraffic, router, ipNames]);
+  const clickTimer = import_react.default.useRef(null);
+  const selectDevice = import_react.default.useCallback((ip) => {
+    if (clickTimer.current) {
+      clearTimeout(clickTimer.current.t);
+      if (clickTimer.current.ip === ip) {
+        clickTimer.current = null;
+        setSelIp(ip);
+        return;
+      }
+      clickTimer.current = null;
+    }
+    clickTimer.current = {
+      ip,
+      t: setTimeout(() => {
+        clickTimer.current = null;
+        setSelIp((cur) => cur === ip ? "" : ip);
+      }, 260)
+    };
+  }, []);
+  const selDevice = import_react.default.useMemo(() => {
+    if (!selIp) return null;
+    return router?.router_devices?.find((d) => d.ip === selIp) || null;
+  }, [selIp, router]);
   const [showAll, setShowAll] = import_react.default.useState(false);
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dash", children: [
     data && !data.missing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -25025,7 +25083,7 @@ function Dashboard() {
             "div",
             {
               className: "rtrtop-row" + (selIp === item.d.ip ? " sel" : " click"),
-              onClick: () => setSelIp(selIp === item.d.ip ? "" : item.d.ip),
+              onClick: () => selectDevice(item.d.ip),
               role: "button",
               tabIndex: 0,
               children: [
@@ -25050,7 +25108,9 @@ function Dashboard() {
             item.d.ip + item.d.mac
           ))
         ] }) : null,
+        selDevice ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DeviceDetail, { d: selDevice, name: ipNames.get(selDevice.ip) || selDevice.hostname || selDevice.vendor || "" }) : null,
         selChart ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PerDeviceChart, { device: selChart.device, rows: selChart.rows, max: selChart.max, win: selChart.win }) : null,
+        selIp && selDevice && !selChart ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "routernote dim", children: "\u8BE5\u8BBE\u5907\u6682\u65E0\u6D41\u91CF\u5386\u53F2\uFF08\u6570\u636E\u5FAA\u73AF\u521A\u8DD1\u6216\u8BE5\u8BBE\u5907\u79BB\u7EBF\u5DF2\u4E45\uFF09\uFF0C\u70B9\u300C\u5237\u65B0\u300D\u6216\u7B49 1 \u4E2A\u5468\u671F\u518D\u770B\u66F2\u7EBF\uFF1B\u4E0A\u65B9\u8BE6\u60C5\u5361\u5DF2\u5C55\u793A\u5B83\u7684\u5168\u90E8\u4FE1\u606F\u3002" }) : null,
         router.router_devices && router.router_devices.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "rtrdevs", children: [
           router.router_devices && router.router_devices.length > 5 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "rtrdevs-toggle", onClick: () => setShowAll(!showAll), children: showAll ? "\u6536\u8D77\u5B8C\u6574\u5217\u8868" : `\u5C55\u5F00\u5168\u90E8 ${router.router_count} \u53F0\u7EC8\u7AEF` }) : null,
           (showAll ? router.router_devices : router.router_devices?.slice(0, 5) ?? []).map((d) => {
@@ -25059,7 +25119,7 @@ function Dashboard() {
               "div",
               {
                 className: "rtrdev " + (d.online ? "" : "off") + (selIp === d.ip ? " sel" : " click"),
-                onClick: () => setSelIp(selIp === d.ip ? "" : d.ip),
+                onClick: () => selectDevice(d.ip),
                 role: "button",
                 tabIndex: 0,
                 children: [

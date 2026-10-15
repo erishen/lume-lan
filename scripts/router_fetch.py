@@ -190,9 +190,12 @@ def extract_hostinfo(payload) -> list:
         if not isinstance(d, dict):
             continue
         mac = str(d.get("MACAddress") or "").lower()
-        host = str(d.get("HostName") or d.get("ActualName") or "")
-        if re.fullmatch(r"未知设备-[0-9A-Fa-f]{4}", host):  # 路由器没认出 → 置空, 靠 MAC/厂商兜底
-            host = ""
+        # 显示名优先级: 用户手写备注(ActualName, 由终端管理页「设备改名/备注」
+        # 经 changedevicename 写入, 最权威) > 设备自报主机名(HostName) > 空。
+        host = str(d.get("ActualName") or "").strip()
+        if not host:
+            hn = str(d.get("HostName") or "").strip()
+            host = "" if re.fullmatch(r"未知设备-[0-9A-Fa-f]{4}", hn) else hn
         # 厂商只信路由器 DevBrands(权威); 识别不出则留空, 不臆造。
         vendor = str(d.get("DevBrands") or "").strip()
         last = ""

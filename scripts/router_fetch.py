@@ -444,6 +444,122 @@ def _load_last_wan_topo() -> tuple:
         return {}, {}
 
 
+# ---- 告警: 新设备进网 / WAN 状态跳变 / 异常流量(状态去重, 首次静默建基线) ----
+ALERT_STATE = os.path.join(ROOT, ".data", "alert_state.json")
+ANOMALY_BYTES = 10 * 1024 * 1024 * 1024   # 近 1h 增量 >= 10GB 判异常(与前端告警同阈值)
+ANOMALY_RESEND_SECS = 1800                 # 同设备异常告警 30min 去重
+
+
+def _load_aliases_py() -> dict:
+    """本地命名层(与 devices.lume 同一份 .data/aliases.json), 告警文案友好显示用。"""
+    try:
+        with open(os.path.join(ROOT, ".data", "aliases.json"), encoding="utf-8") as f:
+            d = json.load(f)
+            return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _dev_label(d: dict, aliases: dict) -> str:
+    """显示名优先级与界面一致: 本地别名 > 路由器备注/hostname > 厂商 > IP。"""
+    return (aliases.get(d.get("ip", ""))
+            or d.get("hostname") or d.get("vendor") or d.get("ip") or "?")
+
+
+def _load_alert_state() -> dict:
+    try:
+        with open(ALERT_STATE, encoding="utf-8") as f:
+            st = json.load(f)
+            return st if isinstance(st, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_alert_state(st: dict) -> None:
+    try:
+        tmp = ALERT_STATE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(st, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, ALERT_STATE)
+    except OSError:
+        pass
+
+
+def check_alerts(devices: list, wan: dict, fetched_at: int) -> list:
+    """基于本轮 fresh 数据评估告警。返回告警行(空 = 无)。仅在登录成功时调用。
+
+    规则:
+      - 首次(无状态文件): 静默建基线, 不告警(避免把 32 台全推进群里)
+      - 新设备进网: MAC 不在已知集合 且 当前在线
+      - WAN 跳变: 状态 Up ↔ 其它(有上次记录时)
+      - 异常流量: 在线且 delta_1h >= 10GB, 同设备 30min 去重
+    副作用: 更新 .data/alert_state.json; 配了 WEBHOOK_URL 就经 webhook_notify 推送,
+    没配只打印(数据循环跑不报错)。
+    """
+    state = _load_alert_state()
+    first_run = "known_macs" not in state
+    aliases = _load_aliases_py()
+
+    lines = []
+    known = {str(m).lower() for m in (state.get("known_macs") or {})}
+    all_macs = [str(d.get("mac") or "").lower() for d in devices if d.get("mac")]
+
+    # 新设备进网(首次建基线时静默)
+    if not first_run:
+        for d in devices:
+            mac = str(d.get("mac") or "").lower()
+            if mac and mac not in known and d.get("online"):
+                extra = f"、厂商 {d['vendor']}" if d.get("vendor") else ""
+                lines.append(f"🆕 新设备进网: {_dev_label(d, aliases)}"
+                             f"（{d.get('ip') or '?'}、MAC {d.get('mac')}{extra}）")
+
+    # WAN 状态跳变(有上次记录时; 首次静默)
+    cur_wan = str((wan or {}).get("status") or "")
+    prev_wan = str(state.get("wan_status") or "")
+    if not first_run and prev_wan and cur_wan and prev_wan != cur_wan:
+        lines.append(f"🌐 WAN 状态变化: {prev_wan} → {cur_wan}"
+                     f"（{(wan or {}).get('access_type') or '以太网'} 上行）")
+
+    # 异常流量(30min 去重)
+    last_ts = dict(state.get("anomaly_ts") or {})
+    for d in devices:
+        if not d.get("online"):
+            continue
+        dl = d.get("delta_1h")
+        if dl is None or dl < ANOMALY_BYTES:
+            continue
+        ip = str(d.get("ip") or "?")
+        if fetched_at - int(last_ts.get(ip, 0) or 0) < ANOMALY_RESEND_SECS:
+            continue
+        gb = dl / (1024 ** 3)
+        lines.append(f"📈 异常流量: {_dev_label(d, aliases)}（{ip}）"
+                     f"近 1h 流量 {gb:.1f} GB")
+        last_ts[ip] = fetched_at
+
+    # 更新状态: known 并入全部当前 MAC(含离线, 防老设备回流误报); 异常时间戳; WAN 现状
+    merged = {m: 1 for m in known}
+    for m in all_macs:
+        merged[m] = 1
+    state["known_macs"] = merged
+    state["anomaly_ts"] = last_ts
+    if cur_wan:
+        state["wan_status"] = cur_wan
+    _save_alert_state(state)
+
+    if lines:
+        text = "lume-lan 告警:\n" + "\n".join(lines)
+        try:
+            import webhook_notify  # 同目录; 直接跑脚本时 scripts/ 在 sys.path[0]
+        except ImportError:
+            import sys
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import webhook_notify
+        ok, detail = webhook_notify.send_text(text)
+        print("告警: " + "；".join(lines))
+        print("  webhook: " + detail)
+    return lines
+
+
 def main():
     env = load_env()
     host = (env.get("ROUTER_HOST") or "192.168.3.1")
@@ -574,6 +690,11 @@ def main():
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(payload_out, f, ensure_ascii=False, indent=2)
     os.replace(tmp, OUT)
+
+    # 告警评估(仅 fresh 登录成功时: 新设备进网 / WAN 跳变 / 异常流量)。
+    # 冷却/stale 态拿的是旧快照, 再评估会误报, 所以只在 fresh 数据上跑。
+    if login["ok"]:
+        check_alerts(devices, wan, fetched_at)
 
     print(f"router.json: deviceinfo ok={router.get('ok')} "
           f"model={router.get('model')} serial={router.get('serial')}")

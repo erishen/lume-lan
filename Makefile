@@ -67,6 +67,12 @@ scan-sweep:
 router-fetch:
 	@$(PY) scripts/router_fetch.py
 
+# 发一条测试消息到 webhook(验证 .env 的 WEBHOOK_URL/SECRET 配对了)。
+# 告警(新设备进网/WAN 跳变/异常流量)在 make router-fetch / dev 数据循环里自动评估,
+# 配了 webhook 就推群里, 没配只打印。
+notify-test:
+	@$(PY) scripts/webhook_notify.py "lume-lan webhook 测试: 收到这条说明配好了 ✓"
+
 check:
 	@$(LUME) --check lan.lume
 
@@ -162,5 +168,5 @@ docker-compose:
 docker-compose-down:
 	@docker compose down
 
-.PHONY: default dev lan lan-dev stop scan scan-sweep check ui watch router-fetch \
+.PHONY: default dev lan lan-dev stop scan scan-sweep check ui watch router-fetch notify-test \
          docker-fetch docker-build docker-build-multiarch docker-run docker-up docker-down docker-redeploy docker-compose docker-compose-down

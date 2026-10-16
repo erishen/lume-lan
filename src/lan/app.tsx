@@ -47,19 +47,25 @@ function isActive(d: RouterDevice): boolean {
   return delta === undefined || delta === null ? true : delta >= 1048576;
 }
 
-/* 设备行:IP / 设备名(路由器 HostName/厂商,按 IP 关联) / MAC / 网卡 / 来源 / 在线态。 */
-function DeviceRow({ ip, mac, iface, source, live, gateway, name }: {
+/* 设备行:IP / 设备名(路由器 HostName/厂商,按 IP 关联) / MAC / 网卡 / 来源 / 在线态。
+ * state: 3 态(与终端列表一致)on=在线·活跃 idle=在线·挂起 off=离线; 缺省从 live 推断。 */
+function DeviceRow({ ip, mac, iface, source, live, gateway, name, state }: {
   ip: string; mac: string; iface?: string; source?: string; live?: boolean; gateway?: boolean; name?: string;
+  state?: "on" | "idle" | "off";
 }): React.ReactElement {
-  const on = live === false ? "off" : "on";
+  const st = state ?? (live === false ? "off" : "on");
   return (
-    <tr className={"row-" + on}>
+    <tr className={"row-" + st}>
       <td className="ip">{ip}{gateway ? <span className="tag gw">网关</span> : null}</td>
       <td>{name ? <span className="devname" title={name}>{name}</span> : <span className="dim">—</span>}</td>
       <td className="mono">{mac || <span className="dim">—</span>}</td>
       <td>{iface ? <span className="iface">{iface}</span> : <span className="dim">—</span>}</td>
       <td><span className={"src src-" + (source || "arp")}>{source === "router" ? "路由器" : source === "sweep" ? "Ping" : "ARP"}</span></td>
-      <td>{on === "on" ? <span className="dot on" /> : <span className="dot off" />}{on === "on" ? "在线" : "离线"}</td>
+      <td>
+        {st === "off" ? <><span className="dot off" />离线</>
+          : st === "idle" ? <><span className="dot idle" />在线·挂起</>
+          : <><span className="dot on" />在线</>}
+      </td>
     </tr>
   );
 }
@@ -281,6 +287,18 @@ function Dashboard(): React.ReactElement {
     router?.router_devices?.forEach((d) => { if (d.ip && d.freq) m.set(d.ip, d.freq); });
     return m;
   }, [router]);
+  /* IP → 三态(与终端列表同语义):路由器端有 delta_1h 时按 1MB 阈值分「在线·挂起/在线」,
+   * 没有的(本机 ARP 快照)兜底为 online 布尔。 */
+  const ipState = React.useMemo(() => {
+    const m = new Map<string, "on" | "idle" | "off">();
+    const seenIps = new Set<string>();
+    data?.devices?.forEach((d) => { if (d.ip) { m.set(d.ip, d.live ? "on" : "off"); seenIps.add(d.ip); } });
+    router?.router_devices?.forEach((d) => {
+      if (!d.ip || seenIps.has(d.ip)) return;
+      m.set(d.ip, !d.online ? "off" : isActive(d) ? "on" : "idle");
+    });
+    return m;
+  }, [data, router]);
 
   /* 合并列表:ARP 本机快照 + 路由器在线设备(不在 ARP 表里的补进来, source=router)。
    * 这样「在线设备」不再受限于本机 arp 缓存,而是全网在线都可见。 */
@@ -676,7 +694,7 @@ function Dashboard(): React.ReactElement {
               <thead><tr><th>IP</th><th>设备名</th><th>MAC</th><th>网卡</th><th>来源</th><th>状态</th></tr></thead>
               <tbody>
                 {shown.map((d) => (
-                  <DeviceRow key={d.ip} ip={d.ip} mac={d.mac} iface={d.iface} source={d.source} live={d.live} gateway={d.gateway} name={ipNames.get(d.ip)} />
+                  <DeviceRow key={d.ip} ip={d.ip} mac={d.mac} iface={d.iface} source={d.source} live={d.live} gateway={d.gateway} name={ipNames.get(d.ip)} state={ipState.get(d.ip)} />
                 ))}
                 {shown.length === 0 && <tr><td colSpan={6} className="empty">无匹配设备</td></tr>}
               </tbody>

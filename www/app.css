@@ -130,6 +130,7 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .src.router { background: rgba(37, 99, 235, 0.14); color: var(--accent); }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
 .dot.on { background: var(--ok); }
+.dot.idle { background: #d97706; }
 .dot.off { background: var(--off); }
 .empty { text-align: center; color: var(--muted); padding: 24px; }
 

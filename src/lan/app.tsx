@@ -266,7 +266,8 @@ function DnsGuide({ dns, dnsTarget }: {
               <div className="dnsguide-sub">
                 Mac：系统设置 → 网络 → DNS → 加 <span className="mono">{dnsTarget}</span> 和 <span className="mono">{DNS_FALLBACK}</span><br />
                 iPhone：设置 → Wi-Fi → ⓘ → 配置 DNS → 手动 → 同上加<br />
-                Android：原生 Wi-Fi 不暴露静态 DNS —— ① 装官方 <a href="https://adguard.com/adguard-for-android.html" target="_blank" rel="noreferrer">AdGuard for Android</a> App（免费）→ 填 <span className="mono">{dnsTarget}</span>；② 或路由器 DHCP 下发静态 DNS 让全家自动生效<br />
+                Android：设置 → Wi-Fi → 长按已连网络（或点 ⓘ）→ 显示高级选项 → IP 设置改「静态」→ DNS1 填 <span className="mono">{dnsTarget}</span>、DNS2 填 <span className="mono">{DNS_FALLBACK}</span>（需同时填对本机 IP/网关；保存后 DNS 生效）<br />
+                （或装开源免费的 Blokada 2 App 走 VPN 模式接管 DNS；AdGuard for Android 已改订阅制 14 天试用）<br />
                 本机（AdGuard 载体）没开时，设备落到备用 <span className="mono">{DNS_FALLBACK}</span>，不断网
               </div>
             </div>

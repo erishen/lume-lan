@@ -82,23 +82,24 @@ daily-digest:
 	@$(PY) scripts/daily_digest.py
 
 # ---- AdGuard Home(DNS 记录: 看「谁访问了什么域名」)----
-# 并入主 docker-compose.yml, 跟 lume-lan 一起起; 也可单独起:
-#   make adguard-up      只起 AdGuard(宿主 10095=控制台/API, 53=DNS; 默认已含在看板 make docker-up 里)
-#   make adguard-down    停 AdGuard 容器(配置持久化在 .data/adguard/)
-#   make dns-fetch       抓一次查询日志 → .data/dns.json(配了才自动, 不配也不崩)
-#   make adguard-log     看 AdGuard 容器日志
+# AdGuard 已并入主 docker-compose.yml, 跟看板同一个 project。
+#   make docker-up     看板 + AdGuard 一起起(推荐, 一条命令全起)
+#   make adguard-up    只起 AdGuard 那一个服务(compose up -d adguard)
+#   make adguard-down  只停 AdGuard
+#   make adguard-log   看 AdGuard 容器日志
+#   make dns-fetch     抓一次查询日志 → .data/dns.json(配了才自动, 不配也不崩)
 # 让家里设备 DNS「首选」指 <本机IP>:53(AdGuard)、「备用」填 223.5.5.5; 本机不开时设备落到备用, 不断网。
 # 宿主 web 端口走 ADGUARD_PORT(默认 10095, >10000 约定); 覆盖: make adguard-up ADGUARD_PORT=11095。
 adguard-up:
-	@echo "▶ 起 AdGuard Home(宿主:$(ADGUARD_PORT)=控制台, 53=DNS)…"
-	@ADGUARD_PORT=$(ADGUARD_PORT) docker compose -f adguard.home.yml up -d
+	@echo "▶ 只起 AdGuard(宿主:$(ADGUARD_PORT)=控制台, 53=DNS)…"
+	@ADGUARD_PORT=$(ADGUARD_PORT) docker compose up -d adguard
 	@echo "  首次请进 http://127.0.0.1:$(ADGUARD_PORT) 向导(或直接默认保存); 起完跑 make dns-fetch 看记录"
 
 adguard-down:
-	@ADGUARD_PORT=$(ADGUARD_PORT) docker compose -f adguard.home.yml down
+	@ADGUARD_PORT=$(ADGUARD_PORT) docker compose down adguard
 
 adguard-log:
-	@ADGUARD_PORT=$(ADGUARD_PORT) docker compose -f adguard.home.yml logs -f adguard
+	@docker compose logs -f adguard
 
 dns-fetch:
 	@$(PY) scripts/adguard_fetch.py
@@ -189,20 +190,17 @@ docker-run: scan router-fetch
 			-e ROUTER_HOST="$(ROUTER_HOST)" $(DOCKER_IMAGE); \
 	fi
 
-# 后台起 / 停。看板 + AdGuard 一起起(固定容器名, 便于 make docker-down 清理)。
+# 后台起 / 停。看板 + AdGuard 统一走主 docker-compose.yml(同一 compose project,
+# 一起起一起停, 容器名 lume-lan / adguard-home)。
 # 宿主 web 端口: 看板 DOCKER_PORT(10091), AdGuard 控制台 ADGUARD_PORT(10095), DNS 53。
 docker-up:
-	@echo "▶ 后台起 $(DOCKER_IMAGE) + AdGuard → 看板 http://127.0.0.1:$(DOCKER_PORT)/ · AdGuard 控制台 http://127.0.0.1:$(ADGUARD_PORT)"
-	@docker rm -f lan-lan 2>/dev/null || true
-	@docker run -d --name lan-lan -p $(DOCKER_PORT):8091 -v $$(pwd)/.data:/app/.data \
-		-e ROUTER_HOST="$(ROUTER_HOST)" $(DOCKER_IMAGE)
-	@ADGUARD_PORT=$(ADGUARD_PORT) docker compose -f adguard.home.yml up -d adguard
+	@echo "▶ 起看板 + AdGuard(同一 compose project) → 看板 http://127.0.0.1:$(DOCKER_PORT)/ · AdGuard 控制台 http://127.0.0.1:$(ADGUARD_PORT)"
+	@DOCKER_PORT=$(DOCKER_PORT) ADGUARD_PORT=$(ADGUARD_PORT) docker compose up -d
 	@echo "  (设备 DNS 首选指 <本机IP>:53 才有域名记录; 没配 AdGuard 也不影响看板)"
 
 docker-down:
-	@ADGUARD_PORT=$(ADGUARD_PORT) docker compose -f adguard.home.yml down adguard 2>/dev/null || true
-	@docker stop lan-lan 2>/dev/null && docker rm lan-lan 2>/dev/null || true
-	@echo "已停并删除容器 lan-lan + adguard-home"
+	@docker compose down
+	@echo "已停并删除容器 lume-lan + adguard-home"
 
 # 一键重新部署: 刷新数据(scan + router-fetch) → 重 build 前端(ui → www/) → 打镜像 → 重启容器。
 # 改完代码/数据想看容器效果就一条命令(不用再记 build + down + up 分开跑)。

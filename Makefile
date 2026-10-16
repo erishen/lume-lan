@@ -87,13 +87,13 @@ daily-digest:
 #   make adguard-up    只起 AdGuard 那一个服务(compose up -d adguard)
 #   make adguard-down  只停 AdGuard
 #   make adguard-log   看 AdGuard 容器日志
-#   make dns-fetch     抓一次查询日志 → .data/dns.json(配了才自动, 不配也不崩)
+#   make dns-fetch dns-watch     抓一次查询日志 → .data/dns.json(配了才自动, 不配也不崩)
 # 让家里设备 DNS「首选」指 <本机IP>:53(AdGuard)、「备用」填 223.5.5.5; 本机不开时设备落到备用, 不断网。
 # 宿主 web 端口走 ADGUARD_PORT(默认 10095, >10000 约定); 覆盖: make adguard-up ADGUARD_PORT=11095。
 adguard-up:
 	@echo "▶ 只起 AdGuard(宿主:$(ADGUARD_PORT)=控制台, 53=DNS)…"
 	@ADGUARD_PORT=$(ADGUARD_PORT) docker compose up -d adguard
-	@echo "  首次请进 http://127.0.0.1:$(ADGUARD_PORT) 向导(或直接默认保存); 起完跑 make dns-fetch 看记录"
+	@echo "  首次请进 http://127.0.0.1:$(ADGUARD_PORT) 向导(或直接默认保存); 起完跑 make dns-fetch dns-watch 看记录"
 
 adguard-down:
 	@ADGUARD_PORT=$(ADGUARD_PORT) docker compose down adguard
@@ -103,6 +103,12 @@ adguard-log:
 
 dns-fetch:
 	@$(PY) scripts/adguard_fetch.py
+
+# 实时监听 AdGuard 新客户端(定位「设备 DNS 走没走 AdGuard」):
+# 跑着它, 然后在某台设备(如 iQOO)上随便刷个网页, 终端立刻显示那台设备的 IP 进来没。
+# 192.168.164.x = Mac 经 Docker NAT 的测试流量; 192.168.3.x = 真实局域网设备。
+dns-watch:
+	@$(PY) scripts/dns_watch.py
 
 # ---- MAC 黑名单(拉黑/解除成对; 拉黑=断网, 网关/关键设备/备注设备默认拒绝, --force 覆盖) ----
 # 每个命令 1 次登录, 别连发(限流冷却 5min)。预演加 EXTRA='--dry-run'。
@@ -219,6 +225,6 @@ docker-compose-down:
 	@docker compose down
 
 .PHONY: default dev lan lan-dev stop scan scan-sweep check ui watch router-fetch notify-test daily-digest \
-         adguard-up adguard-down adguard-log dns-fetch \
+         adguard-up adguard-down adguard-log dns-fetch dns-watch \
          block block-list unblock \
          docker-fetch docker-build docker-build-multiarch docker-run docker-up docker-down docker-redeploy docker-compose docker-compose-down

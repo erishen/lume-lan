@@ -257,11 +257,23 @@ def extract_wan(payload) -> dict:
     if not wans:
         return {}
     w = wans[0]
-    # 带宽峰值(kbps): 历史串取最大值
-    def max_hist(key):
+    # 带宽峰值(kbps): 优先路由器自带的 *BandwidthMax(历史累计最大值, 权威);
+    # 缺失才回落到 History 串(滚动采样窗口)取 max。
+    # 当前速率(kbps): History 串最后一个采样点(最近一个采样周期的实测值)。
+    def kbps_max(key):
+        v = int(w.get(key) or 0)
+        if v > 0:
+            return v
         try:
-            vals = [int(x) for x in str(w.get(key) or "").split(",") if x]
-            return max(vals) if vals else int(w.get(key.replace("History", "Max")) or 0)
+            hist = [int(x) for x in str(w.get(key.replace("Max", "History")) or "").split(",") if x]
+            return max(hist) if hist else 0
+        except Exception:
+            return 0
+
+    def kbps_now(key):
+        try:
+            hist = [int(x) for x in str(w.get(key.replace("Max", "History")) or "").split(",") if x]
+            return hist[-1] if hist else 0
         except Exception:
             return 0
     return {
@@ -277,8 +289,10 @@ def extract_wan(payload) -> dict:
         "ipv6_status": str(w.get("IPv6ConnectionStatus") or "").strip(),
         "nat_type": int(w.get("NATType") or 0),
         "mtu": int(w.get("MTU") or 0),
-        "up_max_kbps": max_hist("UpBandwidthHistory"),
-        "down_max_kbps": max_hist("DownBandwidthHistory"),
+        "up_max_kbps": kbps_max("UpBandwidthMax"),
+        "down_max_kbps": kbps_max("DownBandwidthMax"),
+        "up_now_kbps": kbps_now("UpBandwidthMax"),
+        "down_now_kbps": kbps_now("DownBandwidthMax"),
         "conn_count": len(wans),
     }
 
@@ -419,6 +433,17 @@ def _clear_fail_ts() -> None:
         pass
 
 
+def _load_last_wan_topo() -> tuple:
+    """从 .data/router.json 读上次成功的 WAN 状态 + 信号拓扑（登录失败/冷却时沿用,
+    避免 stale 态 WAN 卡/信号柱全丢 —— 它们和 devices 一样是"上次成功的快照"）。"""
+    try:
+        with open(OUT, encoding="utf-8") as f:
+            last = json.load(f)
+        return (last.get("router_wan") or {}, last.get("router_topology") or {})
+    except Exception:
+        return {}, {}
+
+
 def main():
     env = load_env()
     host = (env.get("ROUTER_HOST") or "192.168.3.1")
@@ -447,6 +472,8 @@ def main():
             stale = True
             login["stale"] = True
             login["stale_note"] = f"登录冷却中(约 {max(0, wait)//60} 分钟)，沿用上次的终端数据"
+            # 冷却期间 WAN 卡/信号拓扑也沿用上次成功的, 避免界面全空
+            wan, topo = _load_last_wan_topo()
         probe.append({"endpoint": "api/system/user_login", "method": "SKIP",
                       "auth": "sha256_simple", "status": 0, "ok": False,
                       "note": f"cooldown, retry in ~{max(0, wait)}s"})
@@ -493,6 +520,11 @@ def main():
             except Exception as e:
                 probe.append({"endpoint": "api/ntwk/wan", "method": "GET",
                               "auth": "session", "status": -1, "ok": False, "note": f"EXC {e}"})
+            # fresh 登录但某个端点 404/异常(固件差异/限流)时, 别把界面上的 WAN 卡/信号柱清没:
+            if not wan or not topo:
+                lw, lt = _load_last_wan_topo()
+                wan = wan or lw
+                topo = topo or lt
         else:
             # 登录失败（限流/密码错）：记冷却时间戳 + 保留上次成功的终端数据
             _write_fail_ts(fetched_at)
@@ -502,6 +534,7 @@ def main():
                 stale = True
                 login["stale"] = True
                 login["stale_note"] = "本次登录失败，沿用上次的终端列表数据"
+                wan, topo = _load_last_wan_topo()
             probe.append({"endpoint": "api/system/user_login", "method": "POST",
                           "auth": "cooldown-set", "status": 0, "ok": False,
                           "note": f"失败, {LOGIN_COOLDOWN_SECS}s 内不再尝试"})

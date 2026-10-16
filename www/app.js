@@ -24623,6 +24623,8 @@ function WanCard({ wan }) {
   if (!wan || !wan.status) return null;
   const up = wan.status === "Up" || wan.connection === "Connected";
   const mbps = (k) => k && k > 0 ? (k / 1e3).toFixed(1) + " Mbps" : "\u2014";
+  const nowD = wan.down_now_kbps, nowU = wan.up_now_kbps;
+  const hasNow = (nowD || 0) > 0 || (nowU || 0) > 0;
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "wancard", children: [
     /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "wan-title", children: [
       "WAN \u72B6\u6001\uFF08",
@@ -24652,11 +24654,11 @@ function WanCard({ wan }) {
         "NAT \u7C7B\u578B ",
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: wan.nat_type })
       ] }) : null,
-      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "wan-cell", title: "\u672C\u89C2\u6D4B\u7A97\u5185\u5E26\u5BBD\u5CF0\u503C(\u8DEF\u7531\u5668 BandwidthHistory \u5386\u53F2\u4E32\u6700\u5927\u503C)", children: [
-        "\u5CF0\u503C \u2193",
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: mbps(wan.down_max_kbps) }),
-        " \xB7 \u2191",
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: mbps(wan.up_max_kbps) })
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "wan-cell", title: "\u5F53\u524D\u901F\u7387(*BandwidthHistory \u6700\u8FD1\u4E00\u4E2A\u91C7\u6837\u70B9) / \u5386\u53F2\u5CF0\u503C(*BandwidthMax, \u8DEF\u7531\u5668\u7D2F\u8BA1\u6700\u5927)", children: [
+        "\u5F53\u524D \u2193",
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: hasNow ? mbps(nowD) : "\u2014" }),
+        " \xB7 \u5CF0\u503C \u2193",
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: mbps(wan.down_max_kbps) })
       ] })
     ] })
   ] });

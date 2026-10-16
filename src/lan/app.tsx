@@ -131,6 +131,8 @@ function WanCard({ wan }: { wan: RouterPayload["router_wan"] }): React.ReactElem
   if (!wan || !wan.status) return null;
   const up = wan.status === "Up" || wan.connection === "Connected";
   const mbps = (k?: number) => (k && k > 0 ? (k / 1000).toFixed(1) + " Mbps" : "—");
+  const nowD = wan.down_now_kbps, nowU = wan.up_now_kbps;
+  const hasNow = (nowD || 0) > 0 || (nowU || 0) > 0;
   return (
     <div className="wancard">
       <div className="wan-title">WAN 状态（{wan.access_type || "以太网"}接入）</div>
@@ -141,7 +143,9 @@ function WanCard({ wan }: { wan: RouterPayload["router_wan"] }): React.ReactElem
         <span className="wan-cell">DNS <b>{wan.dns || "—"}</b></span>
         {wan.ipv6_addr ? <span className="wan-cell">IPv6 <b>{wan.ipv6_addr.split("/")[0]}</b></span> : null}
         {wan.nat_type ? <span className="wan-cell">NAT 类型 <b>{wan.nat_type}</b></span> : null}
-        <span className="wan-cell" title="本观测窗内带宽峰值(路由器 BandwidthHistory 历史串最大值)">峰值 ↓<b>{mbps(wan.down_max_kbps)}</b> · ↑<b>{mbps(wan.up_max_kbps)}</b></span>
+        <span className="wan-cell" title="当前速率(*BandwidthHistory 最近一个采样点) / 历史峰值(*BandwidthMax, 路由器累计最大)">
+          当前 ↓<b>{hasNow ? mbps(nowD) : "—"}</b> · 峰值 ↓<b>{mbps(wan.down_max_kbps)}</b>
+        </span>
       </div>
     </div>
   );

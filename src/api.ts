@@ -73,8 +73,12 @@ export interface WanStatus {
   ipv6_status?: string;
   nat_type?: number;
   mtu?: number;
+  /** 带宽峰值(kbps): 路由器自带的 *BandwidthMax(历史累计最大值, 权威)。 */
   up_max_kbps?: number;
   down_max_kbps?: number;
+  /** 当前速率(kbps): *BandwidthHistory 最后一个采样点(最近采样周期实测值)。 */
+  up_now_kbps?: number;
+  down_now_kbps?: number;
   conn_count?: number;
 }
 

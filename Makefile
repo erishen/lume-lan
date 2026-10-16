@@ -78,6 +78,23 @@ notify-test:
 daily-digest:
 	@$(PY) scripts/daily_digest.py
 
+# ---- MAC 黑名单(拉黑/解除成对; 拉黑=断网, 网关/关键设备/备注设备默认拒绝, --force 覆盖) ----
+# 每个命令 1 次登录, 别连发(限流冷却 5min)。预演加 EXTRA='--dry-run'。
+#   make block TARGET=192.168.3.99 EXTRA='--reason "陌生设备" --force'  (网关/关键/备注才需 --force)
+#   make unblock TARGET=192.168.3.99
+#   make block-list
+EXTRA ?=
+block:
+	@[ -n "$(TARGET)" ] || { echo "用法: make block TARGET=IP或MAC [EXTRA='--reason ... --force']"; exit 1; }
+	@$(PY) scripts/mac_block.py add $(TARGET) $(EXTRA)
+
+block-list:
+	@$(PY) scripts/mac_block.py list
+
+unblock:
+	@[ -n "$(TARGET)" ] || { echo "用法: make unblock TARGET=IP或MAC"; exit 1; }
+	@$(PY) scripts/mac_block.py remove $(TARGET) $(EXTRA)
+
 check:
 	@$(LUME) --check lan.lume
 
@@ -174,4 +191,5 @@ docker-compose-down:
 	@docker compose down
 
 .PHONY: default dev lan lan-dev stop scan scan-sweep check ui watch router-fetch notify-test daily-digest \
+         block block-list unblock \
          docker-fetch docker-build docker-build-multiarch docker-run docker-up docker-down docker-redeploy docker-compose docker-compose-down

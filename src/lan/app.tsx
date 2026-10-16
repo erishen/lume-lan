@@ -257,7 +257,7 @@ function DnsPanel({ dns, ipNames, hostIp }: {
               <b>打开 AdGuard 控制台</b>
               <div className="dnsguide-sub">
                 <a href={adguardUrl} target="_blank" rel="noreferrer" className="mono">{adguardUrl}</a>
-                首次进向导保存即可；已安装则登录（admin / 你设的密码）
+                当前已关闭 web 认证，免登录直接进；改上游 DNS / 白名单过滤都在这里操作
               </div>
             </div>
           </div>
@@ -268,6 +268,7 @@ function DnsPanel({ dns, ipNames, hostIp }: {
               <div className="dnsguide-sub">
                 Mac：系统设置 → 网络 → DNS → 加 <span className="mono">{dnsTarget}</span> 和 <span className="mono">{dnsFallback}</span><br />
                 iPhone：设置 → Wi-Fi → ⓘ → 配置 DNS → 手动 → 同上加<br />
+                Android：原生 Wi-Fi 设置不暴露静态 DNS，两种办法 —— ① 装官方 <a href="https://adguard.com/adguard-for-android.html" target="_blank" rel="noreferrer">AdGuard for Android</a> App（免费）→ 添加 DNS 服务器填 <span className="mono">{dnsTarget}</span>；② 用路由器下发 DHCP 静态 DNS（部分路由器支持），让全家 Android 自动生效<br />
                 本机（AdGuard 载体）没开时，设备落到备用 DNS <span className="mono">{dnsFallback}</span>，不断网
               </div>
             </div>

@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lume-lan 项目导图</title>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#e6edf3;--muted:#8b949e;
+--c1:#58a6ff;--c2:#3fb950;--c3:#d29922;--c4:#f85149;--c5:#bc8cff;--c6:#39c5cf;--c7:#f778ba;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;padding:28px 20px 48px}
+.root{text-align:center;margin-bottom:6px}
+.root h1{font-size:22px;margin:0;display:inline-block;padding:10px 26px;border:2px solid var(--c1);border-radius:12px;background:var(--card)}
+.root p{color:var(--muted);font-size:13px;margin:6px 0 0}
+.hub{display:flex;justify-content:center;gap:26px;flex-wrap:wrap;margin-top:26px}
+.branch{background:var(--card);border:1px solid var(--line);border-radius:12px;width:330px;overflow:hidden}
+.branch>h2{margin:0;font-size:16px;padding:10px 14px;border-bottom:1px solid var(--line);color:#fff;display:flex;gap:8px;align-items:center}
+.branch>h2 span{font-size:11px;background:rgba(255,255,255,.14);padding:1px 8px;border-radius:99px;color:var(--muted)}
+.b1>h2{background:linear-gradient(90deg,rgba(88,166,255,.25),transparent)} .b1{border-top:3px solid var(--c1)}
+.b2>h2{background:linear-gradient(90deg,rgba(63,185,80,.25),transparent)} .b2{border-top:3px solid var(--c2)}
+.b3>h2{background:linear-gradient(90deg,rgba(210,153,34,.25),transparent)} .b3{border-top:3px solid var(--c3)}
+.b4>h2{background:linear-gradient(90deg,rgba(248,81,73,.25),transparent)} .b4{border-top:3px solid var(--c4)}
+.b5>h2{background:linear-gradient(90deg,rgba(188,140,255,.25),transparent)} .b5{border-top:3px solid var(--c5)}
+.b6>h2{background:linear-gradient(90deg,rgba(57,197,207,.25),transparent)} .b6{border-top:3px solid var(--c6)}
+.b7>h2{background:linear-gradient(90deg,rgba(247,120,186,.25),transparent)} .b7{border-top:3px solid var(--c7)}
+ol,ul{list-style:none;margin:0;padding:10px 14px}
+li{padding:3px 0 3px 14px;position:relative;color:#c9d1d9}
+li::before{content:"";position:absolute;left:2px;top:11px;width:5px;height:5px;border-radius:50%;background:var(--muted)}
+li>span.t{font-weight:600;color:var(--fg)}
+li ul{margin-top:4px;border-left:1px dashed var(--line);padding-left:8px}
+li ul li{font-size:13.5px}
+code{font:12.5px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;background:rgba(110,118,129,.22);padding:1px 5px;border-radius:4px}
+.tag{display:inline-block;font-size:11px;padding:0 6px;border-radius:99px;margin-left:6px;vertical-align:1px}
+.tag.ok{background:rgba(63,185,80,.18);color:#56d364}.tag.warn{background:rgba(248,81,73,.18);color:#ff7b72}.tag.new{background:rgba(88,166,255,.18);color:#58a6ff}
+footer{margin-top:30px;text-align:center;color:var(--muted);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="root">
+  <h1>lume-lan · 家庭局域网看板</h1>
+  <p>lume-core(Lume DSL 服务端) + React + 宿主 Python 脚本 · 网关华为 WS5102(CAT 协议逆向)</p>
+</div>
+
+<div class="hub">
+
+<div class="branch b1">
+<h2>架构 <span>三层</span></h2>
+<ul>
+<li><span class="t">宿主层</span>(Python3 纯标准库)
+  <ul>
+  <li><code>scan_lan.py</code> → .data/devices.json(arp + 可选 sweep)</li>
+  <li><code>router_fetch.py</code> → .data/router.json(登录+HostInfo/topology/wan)</li>
+  <li><code>daily_digest.py</code> 24h 日报</li>
+  <li><code>webhook_notify.py</code> 钉钉/企微</li>
+  <li><code>mac_block.py</code> MAC 黑名单</li>
+  </ul>
+</li>
+<li><span class="t">Lume 服务端</span>
+  <ul>
+  <li><code>lan.lume</code>:server{} + 4 路由 + run()</li>
+  <li><code>devices.lume</code> 只读领域层(无状态)</li>
+  <li>/api/devices · /api/meta · /api/router · /api/router-traffic</li>
+  </ul>
+</li>
+<li><span class="t">React 前端</span>
+  <ul>
+  <li>esbuild → www/app.js(dev 热更, 仓库存压缩版)</li>
+  <li>单页看板 + 筛选/点选交互</li>
+  </ul>
+</li>
+</ul>
+</div>
+
+<div class="branch b2">
+<h2>数据流 <span>60s 循环</span></h2>
+<ul>
+<li><span class="t">make dev</span> 后台循环: scan + router-fetch 每 60s</li>
+<li><span class="t">.data/*.json</span> 宿主/容器共享只读(volume)</li>
+<li><span class="t">流量历史</span> 每 IP 300 点 ≈ 5h + 全家庭总序列</li>
+<li><span class="t">命名层</span> aliases.json(本地) &gt; 路由器备注 &gt; HostName &gt; 厂商</li>
+<li><span class="t">状态文件</span> alert_state / blocklist / digest_state</li>
+</ul>
+</div>
+
+<div class="branch b3">
+<h2>协议逆向 <span>WS5102 CAT</span></h2>
+<ul>
+<li><span class="t">登录</span> 简单 SHA256 路径(与网页 SCRAM 限流独立)
+  <ul><li>限流冷却 5min + stale 数据沿用</li></ul>
+</li>
+<li><span class="t">可用端点</span> <span class="tag ok">200</span>
+  <ul>
+  <li>HostInfo(32 台终端+流量) · topology(RSSI) · wan(状态/峰值)</li>
+  <li>wlanfilterenhance(MAC 准入) · getmacaddress · deviceinfo(免密)</li>
+  </ul>
+</li>
+<li><span class="t">做不了的</span> <span class="tag warn">404</span> qosclass_host / dms / access_auth → 无 QoS 限速 API</li>
+</ul>
+</div>
+
+<div class="branch b4">
+<h2>告警 & 通知 <span>钉钉群</span></h2>
+<ul>
+<li>🆕 新设备进网(MAC 基线, 首次静默)</li>
+<li>🌐 WAN 状态跳变</li>
+<li>📈 异常流量 ≥10GB/1h(30min 去重)</li>
+<li>⚠️ 关键设备离线(CRITICAL_IPS, 上线恢复报)</li>
+<li>📶 每日日报(在线数+流量 Top5+带宽峰值)</li>
+<li><span class="t">命令</span> <code>make notify-test</code> / <code>daily-digest</code> / <code>block|unblock|block-list</code></li>
+</ul>
+</div>
+
+<div class="branch b5">
+<h2>部署 <span>本地 + 容器</span></h2>
+<ul>
+<li><span class="t">本地</span> <code>make dev</code> → :8091(esbuild watch + 数据循环)</li>
+<li><span class="t">Docker</span> vendor/ 离线装静态 Lume + HEALTHCHECK → :10091
+  <ul><li>容器只做 serve+读快照; arp 扫描必须宿主</li></ul>
+</li>
+<li><span class="t">一键</span> <code>make docker-redeploy</code>(数据+前端+镜像+重启)</li>
+</ul>
+</div>
+
+<div class="branch b6">
+<h2>界面功能 <span>看板</span></h2>
+<ul>
+<li>KPI(全网口径) + WAN 状态卡(连接/IPv4/DNS/NAT/峰值)</li>
+<li>流量趋势曲线(峰值时刻 + 主因设备)</li>
+<li>设备类型 / Wi-Fi 频段 点击筛选</li>
+<li>流量 Top5 → 点选: 设备详情卡 + 单设备 5h 曲线</li>
+<li>终端列表: 默认只看活跃; RSSI 信号柱; 备注名同步</li>
+<li>CSV 导出 · 移动端响应式</li>
+</ul>
+</div>
+
+<div class="branch b7">
+<h2>未做 / 限制 <span>后续</span></h2>
+<ul>
+<li>MAC 拉黑写操作待验证(限流冷却后复跑 probe)</li>
+<li>7 天流量报告 / 信号差清单 / 带宽利用率</li>
+<li>暗色模式 · 告警展示页(常亮屏幕)</li>
+<li>实时速率 UpRate/DownRate 恒 0(固件不刷)</li>
+</ul>
+</div>
+
+</div>
+<footer>lume-lan 项目导图 · 2026-10 · 单文件零依赖, 可直接发给别人看</footer>
+</body>
+</html>

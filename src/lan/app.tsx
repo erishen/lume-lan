@@ -268,7 +268,7 @@ function DnsPanel({ dns, ipNames }: {
             </div>
           ))}
         </div>
-      ) : <div className="dnsoff">近 1h 无 DNS 查询记录 —— 确认有设备把 DNS 首选指向了 AdGuard（本机会话：<code>make adguard-up</code> 起的 3000/53 端口）。</div>}
+      ) : <div className="dnsoff">近 1h 无 DNS 查询记录 —— 确认有设备把 DNS 首选指向了 AdGuard（本机 <code>make adguard-up</code> 起的 :53 DNS 口）。</div>}
 
       {clientIps.length > 0 ? (
         <div className="dnsclients">

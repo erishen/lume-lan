@@ -10,8 +10,8 @@
     → Lume 出 /api/dns → 前端「域名访问」区。
 
 配置(.env, shell env 优先):
-    ADGUARD_HOST=127.0.0.1     AdGuard Home 容器宿主端口映射(3000)所在主机
-    ADGUARD_PORT=3000
+    ADGUARD_HOST=127.0.0.1     AdGuard Home 容器宿主端口映射(ADGUARD_PORT, 默认 10095)所在主机
+    ADGUARD_PORT=10095        宿主发布端口(容器内固定 3000, 宿主映射到 10095, >10000 约定)
 
 AdGuard 未运行/不通: 保留旧快照并标记 reachable=false(UI 显示「未连接」), 不崩。
 零第三方依赖(urllib)。
@@ -113,7 +113,7 @@ def build(entries: list, now: int) -> dict:
 def main() -> None:
     cfg = load_env()
     host = cfg.get("ADGUARD_HOST") or os.environ.get("ADGUARD_HOST") or "127.0.0.1"
-    port = str(cfg.get("ADGUARD_PORT") or os.environ.get("ADGUARD_PORT") or "3000")
+    port = str(cfg.get("ADGUARD_PORT") or os.environ.get("ADGUARD_PORT") or "10095")
     limit = 2000
     for a in sys.argv[1:]:
         if a == "--limit" and len(sys.argv) > sys.argv.index(a) + 1:

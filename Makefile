@@ -27,6 +27,9 @@ LUME      ?= $(HOME)/.local/bin/lume
 PORT      ?= 8091
 # docker 容器在宿主的发布端口(>10000, 避开本地 make dev 的 8091); 容器内 Lume 仍绑 8091。
 DOCKER_PORT ?= 10091
+# AdGuard Home 宿主发布端口(web 控制台 + /v3 API; 容器内固定 3000, 宿主映射 ADGUARD_PORT>10000)。
+# DNS 的 53 是协议标准口(设备解析指向它), 不走此变量。覆盖: make adguard-up ADGUARD_PORT=11095。
+ADGUARD_PORT ?= 10095
 # 镜像名 / Lume 版本(与 Dockerfile 的 ARG 一致)。
 DOCKER_IMAGE ?= lume-lan
 LUME_VERSION ?= v0.6.3
@@ -79,22 +82,23 @@ daily-digest:
 	@$(PY) scripts/daily_digest.py
 
 # ---- AdGuard Home(DNS 记录: 看「谁访问了什么域名」)----
-# 起 AdGuard 容器(独立 compose 文件; 首次进 http://127.0.0.1:3000 向导):
-#   make adguard-up      起容器(3000=控制台/API, 53=DNS)
-#   make adguard-down    停容器(配置持久化在 .data/adguard/)
+# 并入主 docker-compose.yml, 跟 lume-lan 一起起; 也可单独起:
+#   make adguard-up      只起 AdGuard(宿主 10095=控制台/API, 53=DNS; 默认已含在看板 make docker-up 里)
+#   make adguard-down    停 AdGuard 容器(配置持久化在 .data/adguard/)
 #   make dns-fetch       抓一次查询日志 → .data/dns.json(配了才自动, 不配也不崩)
 #   make adguard-log     看 AdGuard 容器日志
 # 让家里设备 DNS「首选」指 <本机IP>:53(AdGuard)、「备用」填 223.5.5.5; 本机不开时设备落到备用, 不断网。
+# 宿主 web 端口走 ADGUARD_PORT(默认 10095, >10000 约定); 覆盖: make adguard-up ADGUARD_PORT=11095。
 adguard-up:
-	@echo "▶ 起 AdGuard Home(3000=控制台, 53=DNS)…"
-	@docker compose -f adguard.home.yml up -d
-	@echo "  首次请进 http://127.0.0.1:3000 向导(或直接默认保存); 起完跑 make dns-fetch 看记录"
+	@echo "▶ 起 AdGuard Home(宿主:$(ADGUARD_PORT)=控制台, 53=DNS)…"
+	@ADGUARD_PORT=$(ADGUARD_PORT) docker compose -f adguard.home.yml up -d
+	@echo "  首次请进 http://127.0.0.1:$(ADGUARD_PORT) 向导(或直接默认保存); 起完跑 make dns-fetch 看记录"
 
 adguard-down:
-	@docker compose -f adguard.home.yml down
+	@ADGUARD_PORT=$(ADGUARD_PORT) docker compose -f adguard.home.yml down
 
 adguard-log:
-	@docker compose -f adguard.home.yml logs -f adguard
+	@ADGUARD_PORT=$(ADGUARD_PORT) docker compose -f adguard.home.yml logs -f adguard
 
 dns-fetch:
 	@$(PY) scripts/adguard_fetch.py
@@ -185,16 +189,20 @@ docker-run: scan router-fetch
 			-e ROUTER_HOST="$(ROUTER_HOST)" $(DOCKER_IMAGE); \
 	fi
 
-# 后台起 / 停。用固定容器名, 便于 make docker-down 清理。
+# 后台起 / 停。看板 + AdGuard 一起起(固定容器名, 便于 make docker-down 清理)。
+# 宿主 web 端口: 看板 DOCKER_PORT(10091), AdGuard 控制台 ADGUARD_PORT(10095), DNS 53。
 docker-up:
-	@echo "▶ 后台起 $(DOCKER_IMAGE) → http://127.0.0.1:$(DOCKER_PORT)/"
+	@echo "▶ 后台起 $(DOCKER_IMAGE) + AdGuard → 看板 http://127.0.0.1:$(DOCKER_PORT)/ · AdGuard 控制台 http://127.0.0.1:$(ADGUARD_PORT)"
 	@docker rm -f lan-lan 2>/dev/null || true
 	@docker run -d --name lan-lan -p $(DOCKER_PORT):8091 -v $$(pwd)/.data:/app/.data \
 		-e ROUTER_HOST="$(ROUTER_HOST)" $(DOCKER_IMAGE)
+	@ADGUARD_PORT=$(ADGUARD_PORT) docker compose -f adguard.home.yml up -d adguard
+	@echo "  (设备 DNS 首选指 <本机IP>:53 才有域名记录; 没配 AdGuard 也不影响看板)"
 
 docker-down:
+	@ADGUARD_PORT=$(ADGUARD_PORT) docker compose -f adguard.home.yml down adguard 2>/dev/null || true
 	@docker stop lan-lan 2>/dev/null && docker rm lan-lan 2>/dev/null || true
-	@echo "已停并删除容器 lan-lan"
+	@echo "已停并删除容器 lan-lan + adguard-home"
 
 # 一键重新部署: 刷新数据(scan + router-fetch) → 重 build 前端(ui → www/) → 打镜像 → 重启容器。
 # 改完代码/数据想看容器效果就一条命令(不用再记 build + down + up 分开跑)。
@@ -204,9 +212,10 @@ docker-redeploy: scan router-fetch ui docker-build
 	@$(MAKE) docker-up
 	@echo "✅ 重新部署完成 → http://127.0.0.1:$(DOCKER_PORT)/  (宿主侧硬刷新 Cmd+Shift+R)"
 
-# compose 方式(等价于 docker-up, 走 docker-compose.yml)。DOCKER_PORT 经 env 传入。
+# compose 方式(主 compose 现在含 lume-lan + adguard 两个服务, 等价于 make docker-up)。
+# 端口经 env 传入(DOCKER_PORT + ADGUARD_PORT; compose 自动读 .env 做默认值替换)。
 docker-compose:
-	@DOCKER_PORT=$(DOCKER_PORT) docker compose up -d
+	@DOCKER_PORT=$(DOCKER_PORT) ADGUARD_PORT=$(ADGUARD_PORT) docker compose up -d
 
 docker-compose-down:
 	@docker compose down

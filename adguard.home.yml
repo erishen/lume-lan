@@ -1,16 +1,18 @@
 # AdGuard Home — DNS 记录 + 广告过滤(给 lume-lan 提供「谁访问了什么域名」数据)
 #
-# 独立服务(与 docker-compose.yml 分开, 用 make adguard-up 起):
-#   - 容器 adguard-home :3000(web 控制台 + 查询 API), DNS 走 53/udp
-#   - 首次启动进 3000 控制台走一遍安装向导(或直接默认保存)
+# 独立 compose(也可并入主 docker-compose.yml 一起起; 单独用 make adguard-up 起):
+#   - 容器 adguard-home 内固定 :3000(web 控制台 + 查询 API), 宿主发布到 ADGUARD_PORT(默认 10095, >10000)
+#   - DNS 走 53/udp(协议标准口, 设备「首选 DNS」指向 <本机IP>:53)
+#   - 首次启动进 ADGUARD_PORT 控制台走一遍安装向导(或直接默认保存)
 #
 # 使用: 让家里设备的 DNS「首选」指向 <本机IP>:53(AdGuard),「备用」填 223.5.5.5。
 #       本机(AdGuard)不开时, 设备自动落到备用 DNS, 不断网; 只是那段时间没有域名记录。
 #
-# 数据流: AdGuard /v3/querylog + /v3/stats → make dns-fetch 周期抓 → .data/dns.json
+# 数据流: AdGuard /v3/querylog + /v3/stats → make dns-fetch(读宿主 ADGUARD_PORT) → .data/dns.json
 #         → Lume /api/dns → 前端「域名访问」区(每设备最近域名 + 全家域名排行)。
 #
-# 注意: 端口 53 是 DNS 标准口, 本机若已有 DNS 服务(如 dnsmasq)会冲突, 先查 lsof -i :53。
+# 注意: 53 是 DNS 标准口, 本机若已有 DNS 服务(如 dnsmasq)会冲突, 先查 lsof -i :53。
+#       ADGUARD_PORT 经 .env 或 shell 覆盖(默认 10095); 改宿主端口后记得同步 .env 的 ADGUARD_PORT。
 
 services:
   adguard:
@@ -18,8 +20,8 @@ services:
     container_name: adguard-home
     restart: unless-stopped
     ports:
-      - "3000:3000"   # web 控制台 + /v3 API(make dns-fetch 读它)
-      - "53:53/udp"   # DNS 口(设备首选 DNS 指这里)
+      - "${ADGUARD_PORT:-10095}:3000"   # web 控制台 + /v3 API(宿主 10095 → 容器 3000)
+      - "53:53/udp"   # DNS 口(设备首选 DNS 指这里, 协议标准口不改)
       - "53:53/tcp"
     volumes:
       - ./.data/adguard:/opt/adguardhome/work  # 配置/过滤器/查询日志持久化

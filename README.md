@@ -105,7 +105,8 @@ make ui            # 一次性构建前端（esbuild → www/app.js，非 watch�
   Docker Desktop 默认 NAT / Linux `network_mode: host`）需能直连 `ROUTER_HOST`。
 
 ```
-make docker-build                 # 宿主预下载 Lume 二进制到 vendor/ 后打镜像
+make docker-redeploy              # 一键: 刷数据 + 重 build 前端 + 打镜像 + 重启容器
+make docker-build                 # 只打镜像(宿主预下载 Lume 二进制到 vendor/)
 make docker-run                   # 前台起 → http://127.0.0.1:10091/ (Ctrl-C 停)
 #   或后台: make docker-up   /   make docker-down
 ```

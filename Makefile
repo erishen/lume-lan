@@ -147,6 +147,14 @@ docker-down:
 	@docker stop lan-lan 2>/dev/null && docker rm lan-lan 2>/dev/null || true
 	@echo "已停并删除容器 lan-lan"
 
+# 一键重新部署: 刷新数据(scan + router-fetch) → 重 build 前端(ui → www/) → 打镜像 → 重启容器。
+# 改完代码/数据想看容器效果就一条命令(不用再记 build + down + up 分开跑)。
+# 依赖里 router-fetch 若被路由器限流也只是 stale 降级(脚本本身不失败), 安全。
+docker-redeploy: scan router-fetch ui docker-build
+	@$(MAKE) docker-down
+	@$(MAKE) docker-up
+	@echo "✅ 重新部署完成 → http://127.0.0.1:$(DOCKER_PORT)/  (宿主侧硬刷新 Cmd+Shift+R)"
+
 # compose 方式(等价于 docker-up, 走 docker-compose.yml)。DOCKER_PORT 经 env 传入。
 docker-compose:
 	@DOCKER_PORT=$(DOCKER_PORT) docker compose up -d
@@ -155,4 +163,4 @@ docker-compose-down:
 	@docker compose down
 
 .PHONY: default dev lan lan-dev stop scan scan-sweep check ui watch router-fetch \
-         docker-fetch docker-build docker-build-multiarch docker-run docker-up docker-down docker-compose docker-compose-down
+         docker-fetch docker-build docker-build-multiarch docker-run docker-up docker-down docker-redeploy docker-compose docker-compose-down

@@ -78,6 +78,27 @@ notify-test:
 daily-digest:
 	@$(PY) scripts/daily_digest.py
 
+# ---- AdGuard Home(DNS 记录: 看「谁访问了什么域名」)----
+# 起 AdGuard 容器(独立 compose 文件; 首次进 http://127.0.0.1:3000 向导):
+#   make adguard-up      起容器(3000=控制台/API, 53=DNS)
+#   make adguard-down    停容器(配置持久化在 .data/adguard/)
+#   make dns-fetch       抓一次查询日志 → .data/dns.json(配了才自动, 不配也不崩)
+#   make adguard-log     看 AdGuard 容器日志
+# 让家里设备 DNS「首选」指 <本机IP>:53(AdGuard)、「备用」填 223.5.5.5; 本机不开时设备落到备用, 不断网。
+adguard-up:
+	@echo "▶ 起 AdGuard Home(3000=控制台, 53=DNS)…"
+	@docker compose -f adguard.home.yml up -d
+	@echo "  首次请进 http://127.0.0.1:3000 向导(或直接默认保存); 起完跑 make dns-fetch 看记录"
+
+adguard-down:
+	@docker compose -f adguard.home.yml down
+
+adguard-log:
+	@docker compose -f adguard.home.yml logs -f adguard
+
+dns-fetch:
+	@$(PY) scripts/adguard_fetch.py
+
 # ---- MAC 黑名单(拉黑/解除成对; 拉黑=断网, 网关/关键设备/备注设备默认拒绝, --force 覆盖) ----
 # 每个命令 1 次登录, 别连发(限流冷却 5min)。预演加 EXTRA='--dry-run'。
 #   make block TARGET=192.168.3.99 EXTRA='--reason "陌生设备" --force'  (网关/关键/备注才需 --force)
@@ -106,7 +127,7 @@ watch:
 	@$(ESBUILD) src/lan/app.tsx --bundle --format=esm --jsx=automatic --outdir=www --outbase=src/lan --watch
 
 # 日常入口(热更):stop(清旧实例)→ check → scan → router-fetch → esbuild --watch(后台)
-# + 数据刷新循环(后台每 REFRESH_SECS 秒重跑 scan+router-fetch,让「刷新」按钮能拿到新快照;
+# + 数据刷新循环(后台每 REFRESH_SECS 秒重跑 scan+router-fetch+dns-fetch,让「刷新」按钮能拿到新快照;
 #   子 shell pid 落 .runtime/refresh.pid,make stop 用它清掉)→ 前台起 Lume。
 # 重复执行安全——每次先清掉占 PORT 的上次实例。
 # 注意(macOS make 默认 /bin/sh = POSIX sh):不能用 "{ cmd & }" 花括号组(& 后紧跟 } 非法);
@@ -115,7 +136,7 @@ watch:
 dev: stop check scan router-fetch
 	@echo "▶ http://127.0.0.1:$(PORT)  (make dev:热更已开,.tsx 改动自动重打包)"
 	@$(ESBUILD) src/lan/app.tsx --bundle --format=esm --jsx=automatic --outdir=www --outbase=src/lan --watch &
-	@mkdir -p .runtime; { ( while true; do sleep $(REFRESH_SECS); $(PY) scripts/scan_lan.py >/dev/null 2>&1 || true; $(PY) scripts/router_fetch.py >/dev/null 2>&1 || true; done ) & echo $$! > .runtime/refresh.pid; }
+	@mkdir -p .runtime; { ( while true; do sleep $(REFRESH_SECS); $(PY) scripts/scan_lan.py >/dev/null 2>&1 || true; $(PY) scripts/router_fetch.py >/dev/null 2>&1 || true; $(PY) scripts/adguard_fetch.py >/dev/null 2>&1 || true; done ) & echo $$! > .runtime/refresh.pid; }
 	@echo "▶ esbuild watch 后台运行;数据每 $(REFRESH_SECS)s 自动刷新(pid $$(cat .runtime/refresh.pid))"
 	@echo "▶ Lume 起服务中(Ctrl-C 停;残留 watch/数据循环由 make stop 清理)"
 	@$(LUME) lan.lume
@@ -191,5 +212,6 @@ docker-compose-down:
 	@docker compose down
 
 .PHONY: default dev lan lan-dev stop scan scan-sweep check ui watch router-fetch notify-test daily-digest \
+         adguard-up adguard-down adguard-log dns-fetch \
          block block-list unblock \
          docker-fetch docker-build docker-build-multiarch docker-run docker-up docker-down docker-redeploy docker-compose docker-compose-down

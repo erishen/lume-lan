@@ -119,6 +119,37 @@ export interface RouterTrafficPayload {
   ip_count?: number;
 }
 
+/* DNS 域名访问记录(AdGuard Home 查询日志聚合, 宿主 make dns-fetch 轮询)。
+ * reachable=false → AdGuard 没连上, 前端降级显示; clients 按客户端 IP 聚合。 */
+export interface DnsDomain {
+  domain: string;
+  count: number;
+  blocked: number;
+  last_ts?: number;
+}
+export interface DnsClient {
+  name?: string;
+  total: number;
+  blocked: number;
+  last_ts?: number;
+  top?: DnsDomain[];
+}
+export interface DnsPayload {
+  available: boolean;
+  /** AdGuard 可达(查询日志实时拉取成功); false 时 clients 可能是降级旧数据。 */
+  reachable?: boolean;
+  stale?: boolean;
+  note?: string;
+  fetched_at?: number;
+  window_secs?: number;
+  query_count?: number;
+  client_count?: number;
+  /** {clientIp: DnsClient} 近 1h 每客户端 DNS 查询聚合。 */
+  clients?: Record<string, DnsClient>;
+  /** 全家域名排行 Top10(近 1h)。 */
+  top_domains?: DnsDomain[];
+}
+
 export interface RouterPayload {
   available: boolean;
   note?: string;
@@ -169,6 +200,10 @@ export function apiRouter(): Promise<RouterPayload> {
 
 export function apiRouterTraffic(): Promise<RouterTrafficPayload> {
   return apiGet<RouterTrafficPayload>("/api/router-traffic");
+}
+
+export function apiDns(): Promise<DnsPayload> {
+  return apiGet<DnsPayload>("/api/dns");
 }
 
 export function fmtBytes(n?: number): string {

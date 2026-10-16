@@ -46,5 +46,11 @@ get "/api/router-traffic", (req) => {
   return lantbl.router_traffic_payload();
 };
 
+// DNS 域名访问记录:读 .data/dns.json(宿主 make dns-fetch 轮询 AdGuard Home 产出)。
+// reachable=false 时前端显示「AdGuard 未连接」, 但旧数据仍可用(降级)。
+get "/api/dns", (req) => {
+  return lantbl.dns_payload();
+};
+
 // 注册窗口关闭,开始伺服(与 crm.lume 同款——server{} 定义好路由后必须显式 run())。
 run();

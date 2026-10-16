@@ -14,9 +14,13 @@ import {
   RouterPayload,
   RouterDevice,
   RouterTrafficPayload,
+  DnsPayload,
+  DnsClient,
+  DnsDomain,
   apiDevices,
   apiRouter,
   apiRouterTraffic,
+  apiDns,
   fmtTs,
   fmtAge,
   fmtBytes,
@@ -222,6 +226,81 @@ function DeviceDetail({ d, name }: { d: RouterDevice; name: string }): React.Rea
   );
 }
 
+/* DNS 域名访问区(AdGuard Home 查询日志聚合):
+ *  ① 全家域名排行 Top10(近 1h, 拦截的排前)
+ *  ② 每客户端 IP → 最近解析的域名 Top5(哪个设备在看什么)。
+ * reachable=false → AdGuard 没连上, 显示降级横幅(旧数据若有仍列)。
+ * 设备 IP 显示名与主表一致(用 ipNames)。 */
+function DnsPanel({ dns, ipNames }: {
+  dns: DnsPayload;
+  ipNames: Map<string, string>;
+}): React.ReactElement | null {
+  if (!dns.available) {
+    return (
+      <div className="dnsbox dim">
+        <div className="dnstitle">🌐 域名访问<span className="rtrtop-hint">· AdGuard DNS 记录</span></div>
+        <div className="dnsoff">未启用 DNS 记录 —— 起 AdGuard（<code>make adguard-up</code>）+ 配设备 DNS 后跑 <code>make dns-fetch</code> 即可看到「谁访问了什么域名」。</div>
+      </div>
+    );
+  }
+  const clients = dns.clients || {};
+  const clientIps = Object.keys(clients).sort((a, b) => (clients[b]?.total ?? 0) - (clients[a]?.total ?? 0));
+  const top = dns.top_domains || [];
+  const maxTop = top.length ? Math.max(top[0].count, 1) : 1;
+  return (
+    <div className="dnsbox">
+      <div className="dnstitle">
+        🌐 域名访问
+        <span className="rtrtop-hint">· 近 1h · {dns.query_count ?? 0} 次查询 · {dns.client_count ?? 0} 客户端</span>
+        {!dns.reachable ? <span className="dnsstale">⏳ AdGuard 未连接（沿用上次的记录）</span> : null}
+      </div>
+
+      {top.length > 0 ? (
+        <div className="dnstop">
+          <div className="dnstop-title">全家域名 Top {top.length}<span className="rtrtop-hint">· 拦截的排前</span></div>
+          {top.map((t, i) => (
+            <div key={i} className={"dnstop-row" + (t.blocked > 0 ? " blocked" : "")} title={new Date((t.last_ts || 0) * 1000).toLocaleString("zh-CN")}>
+              <span className={"rtrtop-rank" + (i === 0 ? " top" : "")}>{i + 1}</span>
+              <span className="dnstop-dom mono">{t.domain}</span>
+              <div className="dnstop-bar"><div style={{ width: Math.round((t.count / maxTop) * 100) + "%" }} /></div>
+              <span className="dnstop-cnt">{t.count} 次</span>
+              {t.blocked > 0 ? <span className="dnstop-blk">拦截 {t.blocked}</span> : null}
+            </div>
+          ))}
+        </div>
+      ) : <div className="dnsoff">近 1h 无 DNS 查询记录 —— 确认有设备把 DNS 首选指向了 AdGuard（本机会话：<code>make adguard-up</code> 起的 3000/53 端口）。</div>}
+
+      {clientIps.length > 0 ? (
+        <div className="dnsclients">
+          <div className="dnstop-title">各设备最近解析的域名<span className="rtrtop-hint">· 近 1h</span></div>
+          {clientIps.map((ip) => {
+            const c: DnsClient = clients[ip];
+            const nm = ipNames.get(ip) || c.name || ip;
+            return (
+              <div key={ip} className="dnsclient">
+                <div className="dnsclient-head">
+                  <span className="dnsc-client-name">{nm}</span>
+                  <span className="mono dnsc-ip">{ip}</span>
+                  <span className="dnsc-stat">{c.total} 次查询{c.blocked > 0 ? ` · 拦截 ${c.blocked}` : ""}</span>
+                </div>
+                {c.top && c.top.length > 0 ? (
+                  <div className="dnsc-domains">
+                    {c.top.map((t, i) => (
+                      <span key={i} className={"dnsc-dom" + (t.blocked > 0 ? " blocked" : "")}>
+                        {t.domain}<em>{t.count}×</em>
+                      </span>
+                    ))}
+                  </div>
+                ) : <div className="dnsc-domains dim">近 1h 无域名解析记录</div>}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function Dashboard(): React.ReactElement {
   const [data, setData] = React.useState<DevicesPayload | null>(null);
   const [router, setRouter] = React.useState<RouterPayload | null>(null);
@@ -234,18 +313,21 @@ function Dashboard(): React.ReactElement {
   /* 单设备流量趋势: 点选某台设备(Top5/终端行)看它近 5h 自己的曲线 */
   const [selIp, setSelIp] = React.useState<string>("");
   const [rtrTraffic, setRtrTraffic] = React.useState<RouterTrafficPayload | null>(null);
+  const [dns, setDns] = React.useState<DnsPayload | null>(null);
 
   const load = React.useCallback(async () => {
     setErr("");
     try {
-      const [d, ro, rt] = await Promise.all([
+      const [d, ro, rt, dn] = await Promise.all([
         apiDevices(),
         apiRouter().catch(() => null),
         apiRouterTraffic().catch(() => null),
+        apiDns().catch(() => null),
       ]);
       setData(d);
       setRouter(ro);
       setRtrTraffic(rt);
+      setDns(dn);
       setLastFetch(Date.now());
     } catch (e) {
       setErr((e as Error).message);
@@ -660,6 +742,8 @@ function Dashboard(): React.ReactElement {
           ) : router && router.note ? (
             <div className="routernote dim">{router.note}</div>
           ) : null}
+
+          {dns ? <DnsPanel dns={dns} ipNames={ipNames} /> : null}
 
           {(data.stale || data.note) ? <div className={"banner " + (data.stale ? "warn" : "")}>{data.note}</div> : null}
           <div className="toolbar">

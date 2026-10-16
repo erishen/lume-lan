@@ -14,6 +14,9 @@ let aliases_path = ".data/aliases.json";
 // 每设备流量历史(.data/router_traffic_hist.json, 宿主每 60s 追加, 每 IP 保留 300 点)。
 // 单独一个端点 /api/router-traffic 惰性读它, 不让 400KB 的历史进 router.json。
 let hist_path = ".data/router_traffic_hist.json";
+// DNS 域名访问记录(.data/dns.json, 宿主 make dns-fetch 轮询 AdGuard Home 产出)。
+// 惰性单独端点 /api/dns; AdGuard 没跑 → 快照 reachable=false, 前端显示「未连接」。
+let dns_path = ".data/dns.json";
 // 快照「过期」阈值(秒):超过就提示前端重新 make scan。可经 env 覆盖。
 let stale_secs = env("LAN_STALE_SECS");
 if (stale_secs == null) { stale_secs = "300"; }
@@ -52,6 +55,31 @@ export func router_traffic_payload() {
   // {ip: series} 原样下发; 前端按需取某台、差分画增量。
   let n = len(r.ok);
   return { available: true, series: r.ok, ip_count: n };
+}
+
+// DNS 域名访问记录:读 .data/dns.json(宿主 make dns-fetch 轮询 AdGuard Home 产出)。
+// 缺文件 → available=false(前端提示「未启用 AdGuard」);reachable=false → 沿用旧数据降级。
+export func dns_payload() {
+  let txt = read_file(dns_path);
+  if (txt == null) {
+    return { available: false, reachable: false, note: "未启用 DNS 记录——起 AdGuard(make adguard-up)+ 配设备 DNS 后跑 make dns-fetch" };
+  }
+  let r = try(() => json(txt));
+  if (r.err != null || r.ok == null) {
+    return { available: false, reachable: false, note: "DNS 记录损坏——重跑 make dns-fetch" };
+  }
+  return {
+    available: true,
+    reachable: get(r.ok, "reachable", false),
+    stale: get(r.ok, "stale", false),
+    fetched_at: int(get(r.ok, "fetched_at", 0)),
+    window_secs: int(get(r.ok, "window_secs", 3600)),
+    query_count: int(get(r.ok, "query_count", 0)),
+    client_count: int(get(r.ok, "client_count", 0)),
+    clients: get(r.ok, "clients", {}),
+    top_domains: get(r.ok, "top_domains", []),
+    note: get(r.ok, "error", ""),
+  };
 }
 
 // 设备列表:读快照 + 派生统计(总数/在线数/是否过期)。缺失 → 空表 + 指引文案。

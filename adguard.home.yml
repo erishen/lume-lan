@@ -1,0 +1,37 @@
+# AdGuard Home — DNS 记录 + 广告过滤(给 lume-lan 提供「谁访问了什么域名」数据)
+#
+# 独立服务(与 docker-compose.yml 分开, 用 make adguard-up 起):
+#   - 容器 adguard-home :3000(web 控制台 + 查询 API), DNS 走 53/udp
+#   - 首次启动进 3000 控制台走一遍安装向导(或直接默认保存)
+#
+# 使用: 让家里设备的 DNS「首选」指向 <本机IP>:53(AdGuard),「备用」填 223.5.5.5。
+#       本机(AdGuard)不开时, 设备自动落到备用 DNS, 不断网; 只是那段时间没有域名记录。
+#
+# 数据流: AdGuard /v3/querylog + /v3/stats → make dns-fetch 周期抓 → .data/dns.json
+#         → Lume /api/dns → 前端「域名访问」区(每设备最近域名 + 全家域名排行)。
+#
+# 注意: 端口 53 是 DNS 标准口, 本机若已有 DNS 服务(如 dnsmasq)会冲突, 先查 lsof -i :53。
+
+services:
+  adguard:
+    image: adguard/adguardhome:latest
+    container_name: adguard-home
+    restart: unless-stopped
+    ports:
+      - "3000:3000"   # web 控制台 + /v3 API(make dns-fetch 读它)
+      - "53:53/udp"   # DNS 口(设备首选 DNS 指这里)
+      - "53:53/tcp"
+    volumes:
+      - ./.data/adguard:/opt/adguardhome/work  # 配置/过滤器/查询日志持久化
+      - ./.data/adguard/conf:/opt/adguardhome/conf
+    environment:
+      TZ: "Asia/Shanghai"
+    # 开机自动进向导后的默认 upstream: 阿里公共 DNS(国内快且稳)
+    # 也可进 3000 控制台改; 起容器前先写好 upstream.conf 可跳过向导
+    cap_add:
+      - NET_ADMIN   # 部分平台跑 DNS 需要; 无害
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/control/status >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5

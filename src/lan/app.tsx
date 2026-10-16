@@ -490,6 +490,12 @@ function Dashboard(): React.ReactElement {
                 {router.manufacturer_oui ? <span className="routermeta">OUI {router.manufacturer_oui}</span> : null}
                 {(router.router_count ?? 0) > 0 ? <span className="routermeta">· {router.router_count} 台终端，在线 {router.router_online ?? "—"}{typeof router.router_active === "number" ? `（活跃 ${router.router_active}）` : ""}</span> : null}
               </div>
+              {data.gateway ? (
+                <div className="quicklinks">
+                  <a className="qlink" href={"http://" + data.gateway + "/html/index.html"} target="_blank" rel="noreferrer" data-external="1">🛜 路由器管理页 <span className="qlink-mono">{data.gateway}</span></a>
+                  <a className="qlink" href="/mindmap.html" data-external="1">🗺️ 项目导图</a>
+                </div>
+              ) : null}
               {router.login_stale && (router.router_count ?? 0) > 0 ? (
                 <div className="rtrstale">
                   ⏳ {router.login_stale_note || "本次登录失败/冷却中，以下沿用上次的终端数据"}（自动循环稍后重试，无需操作）

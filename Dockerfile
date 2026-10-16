@@ -41,10 +41,16 @@ RUN apt-get update \
 COPY vendor/ /vendor-src/
 
 RUN set -eux; \
-    case "${TARGETARCH}" in \
+    # TARGETARCH 由 buildx 提供; legacy builder 不设 → 自动探测 vendor/ 里的实际 tarball
+    arch="${TARGETARCH:-}"; \
+    if [ -z "${arch}" ]; then \
+      if [ -f "/vendor-src/lume-linux-arm64-static.tar.gz" ]; then arch=arm64; \
+      elif [ -f "/vendor-src/lume-linux-x64-static.tar.gz" ]; then arch=x64; fi; \
+    fi; \
+    case "${arch}" in \
       amd64)  arch=x64   ;; \
       arm64)  arch=arm64 ;; \
-      *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+      *) echo "cannot determine target arch (TARGETARCH='${TARGETARCH}', no matching vendor tarball)" >&2; ls -la /vendor-src >&2; exit 1 ;; \
     esac; \
     install_lume() { \
       mkdir -p /opt/lume; \

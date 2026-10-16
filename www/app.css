@@ -149,6 +149,10 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 /* 路由器信息区 */
 .routerbox { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
 .routerhead { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.quicklinks { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 8px; }
+.qlink { font-size: 0.82rem; padding: 4px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--accent); background: rgba(37, 99, 235, 0.06); }
+.qlink:hover { background: rgba(37, 99, 235, 0.14); }
+.qlink-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
 .routermodel { font-size: 1.05rem; font-weight: 700; }
 .routermeta { font-size: 0.82rem; color: var(--muted); }
 .routerbox .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }

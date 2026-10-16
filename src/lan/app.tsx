@@ -576,14 +576,16 @@ function Dashboard(): React.ReactElement {
               ) : null}
               {router.router_devices && router.router_devices.length > 0 ? (
                 <div className="rtrdevs">
-                  {router.router_devices && router.router_devices.length > 5 ? (
-                    <button className="rtrdevs-toggle" onClick={() => setShowAll(!showAll)}>
-                      {showAll ? "收起完整列表" : `展开全部 ${router.router_count} 台终端`}
-                    </button>
-                  ) : null}
-                  {(showAll ? router.router_devices : (router.router_devices?.slice(0, 5) ?? [])).map((d) => {
-                    const st = !d.online ? "off" : isActive(d) ? "on" : "idle";
+                  {(() => {
+                    /* 默认只显示活跃设备; 挂起中/离线的折叠成一行, 可展开 */
+                    const active = router.router_devices!.filter((d) => isActive(d));
+                    const inactive = router.router_devices!.filter((d) => !isActive(d));
+                    const shownList = showAll ? router.router_devices! : active;
                     return (
+                    <>
+                    {shownList.map((d) => {
+                      const st = !d.online ? "off" : isActive(d) ? "on" : "idle";
+                      return (
                     <div
                       key={d.ip + d.mac}
                       className={"rtrdev " + (d.online ? "" : "off") + (selIp === d.ip ? " sel" : " click")}
@@ -604,7 +606,20 @@ function Dashboard(): React.ReactElement {
                       <span className={"rtrdev-dot " + st} />
                     </div>
                     );
-                  })}
+                    })}
+                    {!showAll && inactive.length > 0 ? (
+                      <button className="rtrdevs-toggle" onClick={() => setShowAll(true)}>
+                        显示挂起中/离线的 {inactive.length} 台
+                      </button>
+                    ) : null}
+                    {showAll && inactive.length > 0 ? (
+                      <button className="rtrdevs-toggle" onClick={() => setShowAll(false)}>
+                        收起挂起中/离线（默认只显示活跃 {active.length} 台）
+                      </button>
+                    ) : null}
+                    </>
+                    );
+                  })()}
                 </div>
               ) : (
                 <div className="routernote">

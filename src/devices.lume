@@ -91,6 +91,7 @@ export func devices_payload() {
       ok: true,
       missing: true,
       gateway: "",
+      host_ip: "",
       subnet: "",
       scanned_at: 0,
       sweep: false,
@@ -119,6 +120,7 @@ export func devices_payload() {
     ok: true,
     missing: false,
     gateway: get(s, "gateway", ""),
+    host_ip: get(s, "host_ip", ""),
     subnet: get(s, "subnet", ""),
     scanned_at: int(get(s, "scanned_at", 0)),
     sweep: get(s, "sweep", false),
@@ -134,10 +136,11 @@ export func devices_payload() {
 export func meta_payload() {
   let s = load_snapshot();
   if (s == null) {
-    return { gateway: "", subnet: "", sweep: false, scanned_at: 0, available: false };
+    return { gateway: "", host_ip: "", subnet: "", sweep: false, scanned_at: 0, available: false };
   }
   return {
     gateway: get(s, "gateway", ""),
+    host_ip: get(s, "host_ip", ""),
     subnet: get(s, "subnet", ""),
     sweep: get(s, "sweep", false),
     scanned_at: int(get(s, "scanned_at", 0)),

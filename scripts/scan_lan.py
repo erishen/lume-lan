@@ -103,6 +103,27 @@ def detect_gateway() -> str:
     return "10.0.0.1"
 
 
+def detect_host_ip() -> str:
+    """本机在局域网里的 IP（默认路由出口接口）。配 AdGuard DNS「首选」要指向它。
+
+    顺序：route get default 的 interface（macOS）→ ifconfig 取该口 inet
+    → /sys/class/net 逐口取（Linux）→ 兜底 127.0.0.1。
+    """
+    import socket
+    # 兜底：连外网时本机会用到的源 IP（不真发包，socket 分配不触发网络）
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.5)
+        s.connect(("8.8.8.8", 53))
+        ip = s.getsockname()[0]
+        s.close()
+        if ip and ip != "127.0.0.1":
+            return ip
+    except Exception:
+        pass
+    return "127.0.0.1"
+
+
 def arp_snapshot() -> list:
     """解析 `arp -a`（macOS）或 `arp -a`（Linux 格式不同，尽力而为）。"""
     devices = {}
@@ -189,6 +210,7 @@ def main():
     ]
     payload = {
         "gateway": gw,
+        "host_ip": detect_host_ip(),
         "subnet": f"{detect_network(gw)}/24",
         "scanned_at": int(time.time()),
         "sweep": sweep,

@@ -222,6 +222,20 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .dnsbox { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; }
 .dnstitle { font-size: 0.9rem; font-weight: 700; margin-bottom: 8px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .dnstitle .rtrtop-hint { font-size: 0.72rem; font-weight: 400; color: var(--muted); }
+.dnstitle-link { font-size: 0.74rem; font-weight: 500; color: var(--accent); text-decoration: none; margin-left: auto; }
+.dnstitle-link:hover { text-decoration: underline; }
+
+/* DNS 配置指引卡(怎么让设备走 AdGuard DNS, 可折叠) */
+.dnsguide { margin: 4px 0 10px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.dnsguide-toggle { width: 100%; text-align: left; background: var(--panel2, rgba(120,130,150,0.06)); border: 0; padding: 8px 12px; font-size: 0.82rem; font-weight: 600; color: var(--fg); cursor: pointer; }
+.dnsguide-toggle:hover { background: rgba(37, 99, 235, 0.08); }
+.dnsguide-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; background: rgba(37, 99, 235, 0.03); }
+.dnsguide-step { display: flex; gap: 10px; align-items: flex-start; font-size: 0.85rem; }
+.dnsguide-num { flex: 0 0 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 0.78rem; font-weight: 700; display: flex; align-items: center; justify-content: center; margin-top: 1px; }
+.dnsguide-sub { margin-top: 3px; font-size: 0.78rem; color: var(--muted); line-height: 1.5; }
+.dnsguide-sub a { color: var(--accent); }
+.dnsguide-sub code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.74rem; background: rgba(120,130,150,0.12); padding: 1px 5px; border-radius: 4px; }
+.dnsguide-stale { font-size: 0.78rem; color: #b45309; background: rgba(217,119,6,0.1); border-radius: 6px; padding: 6px 10px; }
 .dnsstale { font-size: 0.72rem; color: #b45309; background: rgba(217, 119, 6, 0.12); padding: 1px 7px; border-radius: 5px; }
 .dnsoff { font-size: 0.82rem; color: var(--muted); padding: 4px 0; }
 .dnstop { margin-top: 6px; }
@@ -352,4 +366,8 @@ footer.foot { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--l
   .dnstop-bar { min-width: 24px; }
   .dnstop-cnt { min-width: 44px; }
   .dnsc-dom { max-width: 70%; }
+
+  /* DNS 配置指引卡: 窄屏字号收紧, 链接自动换行 */
+  .dnsguide-step { font-size: 0.8rem; }
+  .dnsguide-sub { font-size: 0.74rem; }
 }

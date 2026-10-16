@@ -62,18 +62,20 @@ services:
     container_name: adguard-home
     restart: unless-stopped
     ports:
-      - "${ADGUARD_PORT:-10095}:3000"   # web 控制台 + /v3 API(宿主 10095 → 容器 3000)
+      - "${ADGUARD_PORT:-10095}:3000"   # web 控制台 + /v3 API(宿主 10095 → 容器 3000; 向导默认 80, 首次请改 conf 为 3000 或映射 80)
       - "53:53/udp"                     # DNS 口(设备首选 DNS 指这里)
       - "53:53/tcp"
     volumes:
-      - ./.data/adguard:/opt/adguardhome/work   # 配置/过滤器/查询日志持久化
+      - ./.data/adguard/work:/opt/adguardhome/work   # 查询日志/过滤器持久化
+      - ./.data/adguard/conf:/opt/adguardhome/conf   # AdGuardHome.yaml(向导写出; 不挂会重建丢配置)
     environment:
       TZ: "Asia/Shanghai"
     cap_add:
       - NET_ADMIN   # 部分平台跑 DNS 需要; 无害
     healthcheck:
-      # 容器内打 127.0.0.1:3000(内部固定口), 与宿主映射无关
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/control/status >/dev/null 2>&1 || exit 1"]
+      # 探无需认证的静态页 /login.html(200=活着); web_api 需登录的 API 由 dns-fetch 单独处理。
+      # 安装向导完成前(redirect 到 install)该页也 200, 不影响探活。
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/login.html >/dev/null 2>&1 || wget -qO- http://127.0.0.1:3000/install.html >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 5

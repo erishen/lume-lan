@@ -231,15 +231,77 @@ function DeviceDetail({ d, name }: { d: RouterDevice; name: string }): React.Rea
  *  ② 每客户端 IP → 最近解析的域名 Top5(哪个设备在看什么)。
  * reachable=false → AdGuard 没连上, 显示降级横幅(旧数据若有仍列)。
  * 设备 IP 显示名与主表一致(用 ipNames)。 */
-function DnsPanel({ dns, ipNames }: {
+function DnsPanel({ dns, ipNames, hostIp }: {
   dns: DnsPayload;
   ipNames: Map<string, string>;
+  hostIp: string;
 }): React.ReactElement | null {
+  /* AdGuard 控制台 URL: 容器宿主端口 10095(可配) */
+  const adguardUrl = "http://localhost:10095";
+  /* 折叠的"配置指引"卡: 在用户还没配完 DNS 之前特别有用 */
+  const [showGuide, setShowGuide] = React.useState(true);
+  const dnsTarget = hostIp ? hostIp : "192.168.x.x";  // 兜底
+  const dnsFallback = "223.5.5.5";
+
+  /* 配置指引(可折叠; 有数据后默认收起) */
+  const guide = (
+    <div className={"dnsguide" + (showGuide ? "" : " collapsed")}>
+      <button className="dnsguide-toggle" onClick={() => setShowGuide(!showGuide)} type="button">
+        {showGuide ? "收起" : "展开"} 配置指引 · 怎么让设备走 AdGuard DNS
+      </button>
+      {showGuide ? (
+        <div className="dnsguide-body">
+          <div className="dnsguide-step">
+            <span className="dnsguide-num">1</span>
+            <div>
+              <b>打开 AdGuard 控制台</b>
+              <div className="dnsguide-sub">
+                <a href={adguardUrl} target="_blank" rel="noreferrer" className="mono">{adguardUrl}</a>
+                首次进向导保存即可；已安装则登录（admin / 你设的密码）
+              </div>
+            </div>
+          </div>
+          <div className="dnsguide-step">
+            <span className="dnsguide-num">2</span>
+            <div>
+              <b>设设备 DNS（首选 <span className="mono">{dnsTarget}</span> · 备用 <span className="mono">{dnsFallback}</span>）</b>
+              <div className="dnsguide-sub">
+                Mac：系统设置 → 网络 → DNS → 加 <span className="mono">{dnsTarget}</span> 和 <span className="mono">{dnsFallback}</span><br />
+                iPhone：设置 → Wi-Fi → ⓘ → 配置 DNS → 手动 → 同上加<br />
+                本机（AdGuard 载体）没开时，设备落到备用 DNS <span className="mono">{dnsFallback}</span>，不断网
+              </div>
+            </div>
+          </div>
+          <div className="dnsguide-step">
+            <span className="dnsguide-num">3</span>
+            <div>
+              <b>验证 DNS 数据流（<code>make dns-fetch</code>）</b>
+              <div className="dnsguide-sub">
+                配完 DNS 后跑 <code>make dns-fetch</code> 或让 <code>make dev</code> 的自动循环处理，
+                本区数据会刷新；也可手动点右上「刷新」按钮重拉 <span className="mono">/api/dns</span>
+              </div>
+            </div>
+          </div>
+          {dns.stale ? (
+            <div className="dnsguide-stale">
+              ⚠️ 当前数据是 <b>{new Date((dns.fetched_at ?? 0) * 1000).toLocaleString("zh-CN")}</b> 的旧数据（AdGuard 现在不可达），
+              修好 AdGuard 后自动恢复最新。
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+
   if (!dns.available) {
     return (
       <div className="dnsbox dim">
-        <div className="dnstitle">🌐 域名访问<span className="rtrtop-hint">· AdGuard DNS 记录</span></div>
-        <div className="dnsoff">未启用 DNS 记录 —— 起 AdGuard（<code>make adguard-up</code>）+ 配设备 DNS 后跑 <code>make dns-fetch</code> 即可看到「谁访问了什么域名」。</div>
+        <div className="dnstitle">
+          🌐 域名访问<span className="rtrtop-hint">· AdGuard DNS 记录</span>
+          <a href={adguardUrl} target="_blank" rel="noreferrer" className="dnstitle-link">控制台 ↗</a>
+        </div>
+        {guide}
+        <div className="dnsoff">未启用 DNS 记录 —— 照上面步骤配好设备 DNS 后跑 <code>make dns-fetch</code> 即可看到「谁访问了什么域名」。</div>
       </div>
     );
   }
@@ -253,8 +315,9 @@ function DnsPanel({ dns, ipNames }: {
         🌐 域名访问
         <span className="rtrtop-hint">· 近 1h · {dns.query_count ?? 0} 次查询 · {dns.client_count ?? 0} 客户端</span>
         {!dns.reachable ? <span className="dnsstale">⏳ AdGuard 未连接（沿用上次的记录）</span> : null}
+        <a href={adguardUrl} target="_blank" rel="noreferrer" className="dnstitle-link">控制台 ↗</a>
       </div>
-
+      {guide}
       {top.length > 0 ? (
         <div className="dnstop">
           <div className="dnstop-title">全家域名 Top {top.length}<span className="rtrtop-hint">· 拦截的排前</span></div>
@@ -268,8 +331,7 @@ function DnsPanel({ dns, ipNames }: {
             </div>
           ))}
         </div>
-      ) : <div className="dnsoff">近 1h 无 DNS 查询记录 —— 确认有设备把 DNS 首选指向了 AdGuard（本机 <code>make adguard-up</code> 起的 :53 DNS 口）。</div>}
-
+      ) : <div className="dnsoff">近 1h 无 DNS 查询记录 —— 确认有设备把 DNS 首选指向了 AdGuard（<code>make adguard-up</code> 起的 :53 DNS 口）。</div>}
       {clientIps.length > 0 ? (
         <div className="dnsclients">
           <div className="dnstop-title">各设备最近解析的域名<span className="rtrtop-hint">· 近 1h</span></div>
@@ -743,7 +805,7 @@ function Dashboard(): React.ReactElement {
             <div className="routernote dim">{router.note}</div>
           ) : null}
 
-          {dns ? <DnsPanel dns={dns} ipNames={ipNames} /> : null}
+          {dns ? <DnsPanel dns={dns} ipNames={ipNames} hostIp={data.host_ip || ""} /> : null}
 
           {(data.stale || data.note) ? <div className={"banner " + (data.stale ? "warn" : "")}>{data.note}</div> : null}
           <div className="toolbar">

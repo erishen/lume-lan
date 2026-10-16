@@ -14,6 +14,8 @@ export interface DevicesPayload {
   ok: boolean;
   missing: boolean;
   gateway: string;
+  /** 本机在局域网里的 IP(配 AdGuard DNS「首选」要指向它)。 */
+  host_ip?: string;
   subnet: string;
   scanned_at: number;
   sweep: boolean;
@@ -26,6 +28,7 @@ export interface DevicesPayload {
 
 export interface Meta {
   gateway: string;
+  host_ip?: string;
   subnet: string;
   sweep: boolean;
   scanned_at: number;

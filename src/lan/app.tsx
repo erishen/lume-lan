@@ -141,7 +141,7 @@ function WanCard({ wan }: { wan: RouterPayload["router_wan"] }): React.ReactElem
         <span className="wan-cell">DNS <b>{wan.dns || "—"}</b></span>
         {wan.ipv6_addr ? <span className="wan-cell">IPv6 <b>{wan.ipv6_addr.split("/")[0]}</b></span> : null}
         {wan.nat_type ? <span className="wan-cell">NAT 类型 <b>{wan.nat_type}</b></span> : null}
-        <span className="wan-cell" title="本观测窗内带宽峰值(路由器 BandwidthHistory 历史串最大值)">峰值 <b>{mbps(wan.up_max_kbps)}↑ / {mbps(wan.down_max_kbps)}↓</b></span>
+        <span className="wan-cell" title="本观测窗内带宽峰值(路由器 BandwidthHistory 历史串最大值)">峰值 ↓<b>{mbps(wan.down_max_kbps)}</b> · ↑<b>{mbps(wan.up_max_kbps)}</b></span>
       </div>
     </div>
   );

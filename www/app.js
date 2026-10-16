@@ -24653,13 +24653,10 @@ function WanCard({ wan }) {
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: wan.nat_type })
       ] }) : null,
       /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "wan-cell", title: "\u672C\u89C2\u6D4B\u7A97\u5185\u5E26\u5BBD\u5CF0\u503C(\u8DEF\u7531\u5668 BandwidthHistory \u5386\u53F2\u4E32\u6700\u5927\u503C)", children: [
-        "\u5CF0\u503C ",
-        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("b", { children: [
-          mbps(wan.up_max_kbps),
-          "\u2191 / ",
-          mbps(wan.down_max_kbps),
-          "\u2193"
-        ] })
+        "\u5CF0\u503C \u2193",
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: mbps(wan.down_max_kbps) }),
+        " \xB7 \u2191",
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: mbps(wan.up_max_kbps) })
       ] })
     ] })
   ] });

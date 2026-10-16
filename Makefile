@@ -73,6 +73,11 @@ router-fetch:
 notify-test:
 	@$(PY) scripts/webhook_notify.py "lume-lan webhook 测试: 收到这条说明配好了 ✓"
 
+# 立即推一条日报(在线/活跃台数 + 自上次日报以来流量 Top5 + WAN 状态)。
+# 不手动推的话, 数据循环每 24h 自动推一条(maybe_send 判定)。
+daily-digest:
+	@$(PY) scripts/daily_digest.py
+
 check:
 	@$(LUME) --check lan.lume
 
@@ -168,5 +173,5 @@ docker-compose:
 docker-compose-down:
 	@docker compose down
 
-.PHONY: default dev lan lan-dev stop scan scan-sweep check ui watch router-fetch notify-test \
+.PHONY: default dev lan lan-dev stop scan scan-sweep check ui watch router-fetch notify-test daily-digest \
          docker-fetch docker-build docker-build-multiarch docker-run docker-up docker-down docker-redeploy docker-compose docker-compose-down

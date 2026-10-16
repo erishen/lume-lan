@@ -36,6 +36,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import time
 import urllib.request
 import urllib.error
@@ -485,6 +486,15 @@ def _save_alert_state(st: dict) -> None:
         pass
 
 
+def _critical_ips() -> set:
+    """关键设备名单(CRITICAL_IPS, 逗号分隔): NAS/主 PC 等, 掉线就推。
+    来源: 真 shell env > .env 文件。"""
+    raw = os.environ.get("CRITICAL_IPS") or ""
+    if not raw:
+        raw = load_env().get("CRITICAL_IPS") or ""
+    return {x.strip() for x in raw.split(",") if x.strip()}
+
+
 def check_alerts(devices: list, wan: dict, fetched_at: int) -> list:
     """基于本轮 fresh 数据评估告警。返回告警行(空 = 无)。仅在登录成功时调用。
 
@@ -493,6 +503,7 @@ def check_alerts(devices: list, wan: dict, fetched_at: int) -> list:
       - 新设备进网: MAC 不在已知集合 且 当前在线
       - WAN 跳变: 状态 Up ↔ 其它(有上次记录时)
       - 异常流量: 在线且 delta_1h >= 10GB, 同设备 30min 去重
+      - 关键设备离线: CRITICAL_IPS(.env) 里的设备 在线→离线 跳变推一次, 上线解除
     副作用: 更新 .data/alert_state.json; 配了 WEBHOOK_URL 就经 webhook_notify 推送,
     没配只打印(数据循环跑不报错)。
     """
@@ -519,6 +530,32 @@ def check_alerts(devices: list, wan: dict, fetched_at: int) -> list:
     if not first_run and prev_wan and cur_wan and prev_wan != cur_wan:
         lines.append(f"🌐 WAN 状态变化: {prev_wan} → {cur_wan}"
                      f"（{(wan or {}).get('access_type') or '以太网'} 上行）")
+
+    # 关键设备离线(CRITICAL_IPS; 在线→离线 跳变推一次 + 上线恢复, 不刷屏;
+    # 首次运行只静默建基线, 离线的关键设备登记 flag 等它上线推「恢复」)
+    crit = _critical_ips()
+    if crit:
+        prev_online = dict(state.get("crit_online") or {})
+        offline_flag = set(state.get("crit_offline_flag") or [])
+        now_online = {str(d.get("ip")): bool(d.get("online")) for d in devices
+                      if str(d.get("ip")) in crit}
+        for ip in crit:
+            cur = now_online.get(ip, False)   # 本轮快照里没有 = 离线
+            if not first_run:
+                if ip in prev_online and prev_online[ip] and not cur:
+                    lines.append(f"⚠️ 关键设备离线: {ip}")
+                    offline_flag.add(ip)
+                elif ip not in prev_online and not cur:
+                    offline_flag.add(ip)
+                if cur and ip in offline_flag:
+                    lines.append(f"✅ 关键设备恢复在线: {ip}")
+                    offline_flag.discard(ip)
+            else:
+                if not cur:
+                    offline_flag.add(ip)   # 基线时就离线: 静默登记, 上线时推恢复
+            prev_online[ip] = cur
+        state["crit_online"] = prev_online
+        state["crit_offline_flag"] = sorted(offline_flag)
 
     # 异常流量(30min 去重)
     last_ts = dict(state.get("anomaly_ts") or {})
@@ -695,6 +732,17 @@ def main():
     # 冷却/stale 态拿的是旧快照, 再评估会误报, 所以只在 fresh 数据上跑。
     if login["ok"]:
         check_alerts(devices, wan, fetched_at)
+
+    # 日报: 每 24h 自动推一条(钉钉/企微), 没配 webhook 只打印。手动强推用 make daily-digest。
+    try:
+        import daily_digest
+    except ImportError:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import daily_digest
+    try:
+        daily_digest.maybe_send(devices, wan, fetched_at)
+    except Exception as e:  # noqa: BLE001
+        print(f"daily-digest skipped: {type(e).__name__}: {e}")
 
     print(f"router.json: deviceinfo ok={router.get('ok')} "
           f"model={router.get('model')} serial={router.get('serial')}")

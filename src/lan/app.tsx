@@ -451,6 +451,7 @@ function Dashboard(): React.ReactElement {
   const load = React.useCallback(async () => {
     setErr("");
     setRefreshing(true);
+    const t0 = Date.now();
     /* 主数据: devices 快照决定 KPI/空态, 先单独等它到账再渲染。 */
     try {
       const d = await apiDevices();
@@ -474,6 +475,9 @@ function Dashboard(): React.ReactElement {
     if (rt) setRtrTraffic(rt);
     if (dn) setDns(dn);
     setLastFetch(Date.now());
+    /* 「刷新中…」至少停留 1.2s: 数据太快时也给人明确反馈(不会一闪而过)。 */
+    const el = Date.now() - t0;
+    if (el < 1200) await new Promise((r) => setTimeout(r, 1200 - el));
     setRefreshing(false);
   }, []);
 

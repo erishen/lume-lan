@@ -290,7 +290,10 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .dnstop-title .rtrtop-hint { font-size: 0.7rem; font-weight: 400; color: var(--muted); }
 .dnstop-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 0.85rem; }
 .dnstop-row.blocked { opacity: 0.75; }
-.dnstop-dom { flex: 0 1 auto; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.dnstop-dom { flex: 0 1 auto; max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+/* 域名旁「这是啥网站」小字(本地知识库离线标注, 不查询外部 API) */
+.sitename { font-style: normal; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; font-weight: 400; font-size: 0.78em; color: var(--muted); margin-left: 5px; }
+.dnsc-dom .sitename { font-size: 0.72em; margin-left: 3px; }
 .dnstop-bar { flex: 1 1 auto; min-width: 40px; height: 7px; border-radius: 4px; background: rgba(var(--off-rgb), 0.15); overflow: hidden; }
 .dnstop-bar > div { height: 100%; background: var(--accent); }
 .dnstop-row.blocked .dnstop-bar > div { background: #dc2626; }

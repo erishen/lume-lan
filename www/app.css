@@ -310,6 +310,8 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .dnsc-dom { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.76rem; padding: 1px 7px; border-radius: 5px; background: rgba(var(--accent-rgb), 0.1); color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .dnsc-dom em { font-style: normal; color: var(--muted); margin-left: 4px; font-size: 0.7rem; }
 .dnsc-dom.blocked { background: rgba(var(--red-rgb), 0.12); color: var(--red-text); }
+.dnsc-more { margin-top: 6px; padding: 2px 8px; font-size: 0.72rem; }
+.dnsclient.open { border-color: var(--accent); }
 .dns-select-note { margin-top: 8px; font-size: 0.78rem; }
 
 /* WAN 状态卡(默认连接/接入方式/IPv4/IPv6/DNS/NAT/带宽峰值) */

@@ -333,37 +333,52 @@ function DnsTopList({ top }: { top: DnsDomain[] }): React.ReactElement | null {
   );
 }
 
-/** 各设备卡片: 每台客户端最近解析的域名。 */
+/** 各设备卡片: 每台客户端最近解析的域名(默认 5 条, 可展开看全部)。 */
 function DnsClients({ clients, clientIps, ipNames }: {
   clients: Record<string, DnsClient>;
   clientIps: string[];
   ipNames: Map<string, string>;
 }): React.ReactElement | null {
+  const [open, setOpen] = React.useState<ReadonlySet<string>>(new Set());
   if (!clientIps.length) return null;
+  const toggle = (ip: string) => setOpen((prev) => {
+    const n = new Set(prev);
+    n.has(ip) ? n.delete(ip) : n.add(ip);
+    return n;
+  });
   return (
     <div className="dnsclients">
-      <div className="dnstop-title">各设备最近解析的域名<span className="rtrtop-hint">· 近 1h</span></div>
+      <div className="dnstop-title">各设备最近解析的域名<span className="rtrtop-hint">· 近 1h · 点卡片可展开全部</span></div>
       {clientIps.map((ip) => {
         const c: DnsClient = clients[ip];
         const nm = ipNames.get(ip) || c.name || ip;
+        const all = c.top || [];
+        const show = open.has(ip) ? all : all.slice(0, 5);
         return (
-          <div key={ip} className="dnsclient">
+          <div key={ip} className={"dnsclient" + (open.has(ip) ? " open" : "")}>
             <div className="dnsclient-head">
               <span className="dnsc-client-name">{nm}</span>
               <span className="mono dnsc-ip">{ip}</span>
               <span className="dnsc-stat">{c.total} 次查询{c.blocked > 0 ? ` · 拦截 ${c.blocked}` : ""}</span>
             </div>
-            {c.top && c.top.length > 0 ? (
-              <div className="dnsc-domains">
-                {c.top.map((t, i) => {
-                  const s = siteName(t.domain);
-                  return (
-                    <span key={i} className={"dnsc-dom" + (t.blocked > 0 ? " blocked" : "")}>
-                      {t.domain}{s ? <em className="sitename">{s.name}</em> : null}<em>{t.count}×</em>
-                    </span>
-                  );
-                })}
-              </div>
+            {all.length > 0 ? (
+              <>
+                <div className="dnsc-domains">
+                  {show.map((t, i) => {
+                    const s = siteName(t.domain);
+                    return (
+                      <span key={i} className={"dnsc-dom" + (t.blocked > 0 ? " blocked" : "")}>
+                        {t.domain}{s ? <em className="sitename">{s.name}</em> : null}<em>{t.count}×</em>
+                      </span>
+                    );
+                  })}
+                </div>
+                {all.length > 5 ? (
+                  <button className="btn ghost dnsc-more" onClick={() => toggle(ip)}>
+                    {open.has(ip) ? "收起" : `展开全部 ${all.length} 个域名`}
+                  </button>
+                ) : null}
+              </>
             ) : <div className="dnsc-domains dim">近 1h 无域名解析记录</div>}
           </div>
         );

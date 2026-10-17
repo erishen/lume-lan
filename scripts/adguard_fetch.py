@@ -38,7 +38,7 @@ DATA = ROOT / ".data"
 SNAP = DATA / "dns.json"
 ENV = ROOT / ".env"
 WIN = 3600          # 「近 1h」聚合窗口(秒)
-TOPD = 5            # 每客户端域名 Top N
+TOPD = 15           # 每客户端域名 Top N(前端默认显示 5, 可展开看全部)
 TOTAL_TOP = 10      # 全家域名排行 Top N
 
 
@@ -125,6 +125,9 @@ def build(entries: list, now: int) -> dict:
         cip = e.get("client") or "unknown"
         q = e.get("question") or {}
         name = (q.get("name") or "").lower().rstrip(".")
+        # 个别客户端(如钉钉)会把完整 URL 塞进 DNS 查询, 剥掉协议前缀再展示
+        if name.startswith(("https://", "http://")):
+            name = name.split("://", 1)[1].split("/", 1)[0]
         if not name or name == "":
             continue
         # 拦截判断: 有 filterId 且 reason 不是白名单放行 = 被规则拦。

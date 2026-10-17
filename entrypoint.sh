@@ -27,7 +27,7 @@ if [ "${REFRESH}" = "1" ]; then
       sleep "${REFRESH_SECS:-60}"
     done
   ) &
-  echo "refresh loop pid $! (ROUTER_HOST=${ROUTER_HOST:-192.168.3.1})"
+  echo "refresh loop pid $! (ROUTER_HOST=${ROUTER_HOST:-192.168.1.1})"
 fi
 
 # 前台起 Lume; 容器停止时随之退出

@@ -50,8 +50,9 @@ services:
       # (生成: htpasswd -c -b -B -C 12 .runtime/htpasswd admin <密码>)
       HTPASSWD_FILE: "/auth/htpasswd"
     volumes:
-      # 宿主 make scan / make router-fetch 产出的快照; 容器读它出 /api/*
-      - ./.data:/app/.data
+      # 宿主 make scan / make router-fetch 产出的快照; 容器只读它出 /api/*(只 serve,
+      # 不写宿主数据; 容器被攻破也改不了/删不了快照)
+      - ./.data:/app/.data:ro
       # 看板 Basic Auth 凭据(只读挂载, 不进镜像)
       - ./.runtime/htpasswd:/auth/htpasswd:ro
       # 可选: 路由凭据文件(若不用上面 ROUTER_PASS env)

@@ -23,7 +23,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     REFRESH=0 \
     REFRESH_SECS=60 \
     # 路由器后台地址(Mac Docker Desktop 走默认 NAT 通常直达局域网; Linux 建议 network_mode: host)
-    ROUTER_HOST=192.168.3.1
+    ROUTER_HOST=192.168.1.1
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \

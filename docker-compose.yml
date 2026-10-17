@@ -1,19 +1,20 @@
-# Lume-LAN — docker compose(两个服务一起起: lume-lan 看板 + adguard DNS 记录)
+# Lume-LAN — docker compose(只含 lume-lan 看板; AdGuard 已迁到 Mac 宿主)
 #
-# 两种用法:
+# 用法:
 #   A) 宿主刷新数据 + 容器只 serve(推荐, arp 扫描必须宿主):
 #        1) 宿主先跑一次 make scan + make router-fetch, 生成 .data/
-#        2) make docker-up(docker compose up -d)→ 看板 + AdGuard 一起起, 看板读挂载进来的 .data/
+#        2) make docker-up(docker compose up -d)→ 看板起来, 读挂载进来的 .data/
 #      arp 快照宿主负责(make dev 的 60s 循环), 容器读快照出 API。
 #
 #   B) 容器内自刷新路由器(REFRESH=1, 打 ROUTER_HOST):
 #        路由器/流量/终端在容器内循环更新; arp 快照仍靠宿主(容器无宿主网卡)。
 #
-# AdGuard(DNS 记录「谁访问了什么域名」): make adguard-up 单独只起它;
-#   家里设备 DNS「首选」指 <本机IP>:53(AdGuard)、「备用」填 223.5.5.5;
-#   本机不开 AdGuard 时设备落到备用 DNS 不断网, 只是那段时间没有域名记录。
-#   web 控制台/API 宿主端口 ADGUARD_PORT(默认 10095, >10000 约定; .env 可覆盖);
-#   DNS 53 是协议标准口(设备解析指向它), 不改。
+# AdGuard Home(DNS 记录「谁访问了什么域名」)已迁出容器 → Mac 宿主 launchd 服务
+#   (com.erishen.adguardhome, 见 ~/Library/LaunchAgents/ + ~/Applications/AdGuardHome/)。
+#   原因: 容器发布端口会把所有入站 DNS NAT 成同一个网关 IP, AdGuard 看不到真实
+#   设备, 看板「域名访问」永远只显示 1 客户端; 宿主直绑 53 保留真实客户端 IP。
+#   起停: make adguard-up / adguard-down; 控制台 http://127.0.0.1:10095 (ADGUARD_PORT)。
+#   家里设备 DNS「首选」指 <本机IP>:53(AdGuard)、「备用」填 223.5.5.5。
 #
 # 凭据/端口: compose 自动读当前目录 .env 做变量替换(ROUTER_PASS/WEBHOOK_URL 等不进镜像)。
 #
@@ -44,38 +45,14 @@ services:
       # 告警推送(容器内 REFRESH=1 时数据循环会评估告警; 不配则容器内只打印日志)
       WEBHOOK_URL: "${WEBHOOK_URL:-}"
       WEBHOOK_SECRET: "${WEBHOOK_SECRET:-}"
-      # 可选公网 Basic Auth(本地用可省): 解开并放一个 htpasswd 文件挂进来
-      # HTPASSWD_FILE: "/auth/htpasswd"
+      # 局域网 Basic Auth: htpasswd 文件由 make docker-up 前的 .runtime/htpasswd 提供
+      # (生成: htpasswd -c -b -B -C 12 .runtime/htpasswd admin <密码>)
+      HTPASSWD_FILE: "/auth/htpasswd"
     volumes:
       # 宿主 make scan / make router-fetch 产出的快照; 容器读它出 /api/*
       - ./.data:/app/.data
+      # 看板 Basic Auth 凭据(只读挂载, 不进镜像)
+      - ./.runtime/htpasswd:/auth/htpasswd:ro
       # 可选: 路由凭据文件(若不用上面 ROUTER_PASS env)
       # - ./.env:/app/.env:ro
     # network_mode: host   # Linux host 网络(打不通 NAT 时启用, 并去掉 ports)
-
-  # ---- AdGuard Home: DNS 记录(谁访问了什么域名) + 广告过滤 ----
-  # 容器内固定 :3000(web 控制台 + /v3 查询 API), 宿主发布到 ADGUARD_PORT(默认 10095, >10000)。
-  # dns-fetch 轮询的是宿主 ADGUARD_PORT(见 .env 的 ADGUARD_PORT / make dns-fetch)。
-  # 53 是 DNS 协议标准口(家里设备把「首选 DNS」指向 <本机IP>:53 才记录得到), 不能改。
-  adguard:
-    image: adguard/adguardhome:latest
-    container_name: adguard-home
-    restart: unless-stopped
-    ports:
-      - "${ADGUARD_PORT:-10095}:3000"   # web 控制台 + /v3 API(宿主 10095 → 容器 3000; 向导默认 80, 首次请改 conf 为 3000 或映射 80)
-      - "53:53/udp"                     # DNS 口(设备首选 DNS 指这里)
-      - "53:53/tcp"
-    volumes:
-      - ./.data/adguard/work:/opt/adguardhome/work   # 查询日志/过滤器持久化
-      - ./.data/adguard/conf:/opt/adguardhome/conf   # AdGuardHome.yaml(向导写出; 不挂会重建丢配置)
-    environment:
-      TZ: "Asia/Shanghai"
-    cap_add:
-      - NET_ADMIN   # 部分平台跑 DNS 需要; 无害
-    healthcheck:
-      # 探无需认证的静态页 /login.html(200=活着); web_api 需登录的 API 由 dns-fetch 单独处理。
-      # 安装向导完成前(redirect 到 install)该页也 200, 不影响探活。
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/login.html >/dev/null 2>&1 || wget -qO- http://127.0.0.1:3000/install.html >/dev/null 2>&1 || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 5

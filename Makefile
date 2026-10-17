@@ -81,32 +81,55 @@ notify-test:
 daily-digest:
 	@$(PY) scripts/daily_digest.py
 
+# ---- 看板 Basic Auth 凭据(10091 容器 /auth/htpasswd)----
+# 生成/更新 .runtime/htpasswd(admin 用户, bcrypt cost 12, 权限 600)。
+# 容器已挂载该文件(compose: HTPASSWD_FILE=/auth/htpasswd), 改完要 docker compose up -d 才生效。
+# 用法:
+#   make auth-pass                → 随机生成 20 位强密码并打印(不留 shell 历史)
+#   make auth-pass PASSWORD=xxx   → 用指定密码(注意会出现在 shell 历史/进程列表, 慎用)
+auth-pass:
+	@mkdir -p .runtime
+	@if [ -z "$(PASSWORD)" ]; then \
+	  PASS="$$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)"; \
+	  echo "随机生成密码: $$PASS"; \
+	else PASS="$(PASSWORD)"; fi; \
+	/usr/sbin/htpasswd -c -b -B -C 12 .runtime/htpasswd admin "$$PASS" && \
+	chmod 600 .runtime/htpasswd && \
+	echo "✓ 已写入 .runtime/htpasswd (admin / $$PASS)" && \
+	echo "  生效: docker compose up -d"
+
 # ---- AdGuard Home(DNS 记录: 看「谁访问了什么域名」)----
-# AdGuard 已并入主 docker-compose.yml, 跟看板同一个 project。
-#   make docker-up     看板 + AdGuard 一起起(推荐, 一条命令全起)
-#   make adguard-up    只起 AdGuard 那一个服务(compose up -d adguard)
-#   make adguard-down  只停 AdGuard
-#   make adguard-log   看 AdGuard 容器日志
+# AdGuard 已迁到 Mac 宿主(launchd 服务 com.erishen.adguardhome, 非容器):
+#   容器发布端口会把所有入站 DNS NAT 成同一网关 IP(192.168.164.1), AdGuard 看不到
+#   真实设备, 看板「域名访问」永远 1 客户端; 宿主直绑 53 保留真实客户端 IP。
+#   安装/数据在 ~/Applications/AdGuardHome/(二进制+conf+work), launchd 配置在
+#   ~/Library/LaunchAgents/com.erishen.adguardhome.plist(登录自启, 崩溃自动拉起)。
+#   make adguard-up     启宿主服务(launchd bootstrap / kickstart)
+#   make adguard-down   停宿主服务(launchd bootout)
+#   make adguard-log    看宿主服务日志(~/Applications/AdGuardHome/agh.log)
 #   make dns-fetch dns-watch     抓一次查询日志 → .data/dns.json(配了才自动, 不配也不崩)
 # 让家里设备 DNS「首选」指 <本机IP>:53(AdGuard)、「备用」填 223.5.5.5; 本机不开时设备落到备用, 不断网。
 # 宿主 web 端口走 ADGUARD_PORT(默认 10095, >10000 约定); 覆盖: make adguard-up ADGUARD_PORT=11095。
+PLIST ?= $(HOME)/Library/LaunchAgents/com.erishen.adguardhome.plist
 adguard-up:
-	@echo "▶ 只起 AdGuard(宿主:$(ADGUARD_PORT)=控制台, 53=DNS)…"
-	@ADGUARD_PORT=$(ADGUARD_PORT) docker compose up -d adguard
-	@echo "  首次请进 http://127.0.0.1:$(ADGUARD_PORT) 向导(或直接默认保存); 起完跑 make dns-fetch dns-watch 看记录"
+	@echo "▶ 起 AdGuard 宿主服务(控制台 http://127.0.0.1:$(ADGUARD_PORT), DNS 53)…"
+	@launchctl bootstrap gui/$$(id -u) $(PLIST) 2>/dev/null || launchctl kickstart -k gui/$$(id -u)/com.erishen.adguardhome
+	@echo "  launchd 管理(登录自启); 跑 make dns-fetch dns-watch 看记录"
 
 adguard-down:
-	@ADGUARD_PORT=$(ADGUARD_PORT) docker compose down adguard
+	@launchctl bootout gui/$$(id -u)/com.erishen.adguardhome 2>/dev/null || true
+	@echo "已停 AdGuard 宿主服务"
 
 adguard-log:
-	@docker compose logs -f adguard
+	@tail -f $(HOME)/Applications/AdGuardHome/agh.log
 
 dns-fetch:
 	@$(PY) scripts/adguard_fetch.py
 
 # 实时监听 AdGuard 新客户端(定位「设备 DNS 走没走 AdGuard」):
 # 跑着它, 然后在某台设备(如 iQOO)上随便刷个网页, 终端立刻显示那台设备的 IP 进来没。
-# 192.168.164.x = Mac 经 Docker NAT 的测试流量; 192.168.3.x = 真实局域网设备。
+# 宿主 AdGuard 下: 192.168.3.x = 真实局域网设备(Mac 自己是 192.168.3.57);
+# 192.168.164.1 只剩 OrbStack 里其他容器的 DNS 转发流量。
 dns-watch:
 	@$(PY) scripts/dns_watch.py
 
@@ -196,17 +219,16 @@ docker-run: scan router-fetch
 			-e ROUTER_HOST="$(ROUTER_HOST)" $(DOCKER_IMAGE); \
 	fi
 
-# 后台起 / 停。看板 + AdGuard 统一走主 docker-compose.yml(同一 compose project,
-# 一起起一起停, 容器名 lume-lan / adguard-home)。
-# 宿主 web 端口: 看板 DOCKER_PORT(10091), AdGuard 控制台 ADGUARD_PORT(10095), DNS 53。
+# 后台起 / 停。主 docker-compose.yml 只含 lume-lan 看板(AdGuard 已迁宿主 launchd)。
+# 宿主 web 端口: 看板 DOCKER_PORT(10091); AdGuard 控制台 ADGUARD_PORT(10095), 由宿主服务提供。
 docker-up:
-	@echo "▶ 起看板 + AdGuard(同一 compose project) → 看板 http://127.0.0.1:$(DOCKER_PORT)/ · AdGuard 控制台 http://127.0.0.1:$(ADGUARD_PORT)"
-	@DOCKER_PORT=$(DOCKER_PORT) ADGUARD_PORT=$(ADGUARD_PORT) docker compose up -d
+	@echo "▶ 起看板容器 → http://127.0.0.1:$(DOCKER_PORT)/  (AdGuard 是宿主服务: make adguard-up)"
+	@DOCKER_PORT=$(DOCKER_PORT) docker compose up -d
 	@echo "  (设备 DNS 首选指 <本机IP>:53 才有域名记录; 没配 AdGuard 也不影响看板)"
 
 docker-down:
 	@docker compose down
-	@echo "已停并删除容器 lume-lan + adguard-home"
+	@echo "已停并删除容器 lume-lan"
 
 # 一键重新部署: 刷新数据(scan + router-fetch) → 重 build 前端(ui → www/) → 打镜像 → 重启容器。
 # 改完代码/数据想看容器效果就一条命令(不用再记 build + down + up 分开跑)。

@@ -1,5 +1,8 @@
 # lume-lan Makefile — 局域网设备看板(Lume 服务端 + React + 宿主扫描脚本)
 #
+# 本机自定义值放 .env(已 gitignore); 公开默认全部用通用示例。
+-include .env
+#
 # 常用:
 #   make dev       日常入口(热更):先 stop 清掉 PORT 旧服务/残留 watch/数据循环,再 check+scan,
 #                  然后 esbuild --watch(改 .tsx 即自动重打包,毫秒级)+ 后台数据刷新循环
@@ -13,7 +16,7 @@
 # 分步:
 #   make scan        跑宿主扫描脚本(arp 现成表,秒级)→ 写 .data/devices.json
 #   make scan-sweep  同上加 ping sweep(捞在线但 arp 表没有的设备,较慢)
-#   make router-fetch 抓路由器后台(华为 WS5102/HiLink)→ 写 .data/router.json
+#   make router-fetch 抓路由器后台(家用路由器/HiLink)→ 写 .data/router.json
 #                  (免密的 deviceinfo 直接可用;终端/流量需 .env 填 ROUTER_PASS,命中候选端点)
 #   make ui          一次性构建前端(esbuild 单次 → www/app.js,非 watch;dev 用的是 watch)
 #   make check       只跑 Lume 类型检查(lan.lume + src/devices.lume)
@@ -35,7 +38,7 @@ DOCKER_IMAGE ?= lume-lan
 LUME_VERSION ?= v0.6.3
 LUME_REPO    ?= erishen/lume
 # 路由器地址默认值(docker 目标注入容器; 覆盖: make docker-run ROUTER_HOST=...)。
-ROUTER_HOST  ?= 192.168.3.1
+ROUTER_HOST  ?= 192.168.1.1
 PY        ?= /usr/bin/python3
 
 ESBUILD   := $(shell command -v esbuild 2>/dev/null || echo ../lume/frontend/node_modules/.bin/esbuild)
@@ -65,7 +68,7 @@ scan:
 scan-sweep:
 	@LAN_SWEEP=1 $(PY) scripts/scan_lan.py
 
-# 路由器后台抓取(华为 WS5102/HiLink):免密 deviceinfo 直接写 .data/router.json;
+# 路由器后台抓取(家用路由器/HiLink):免密 deviceinfo 直接写 .data/router.json;
 # 终端/流量需 .env 填 ROUTER_PASS(与 ROUTER_TERMINAL_API,命中候选端点)。取不到不影响 arp 快照。
 router-fetch:
 	@$(PY) scripts/router_fetch.py
@@ -99,25 +102,27 @@ auth-pass:
 	echo "  生效: docker compose up -d"
 
 # ---- AdGuard Home(DNS 记录: 看「谁访问了什么域名」)----
-# AdGuard 已迁到 Mac 宿主(launchd 服务 com.erishen.adguardhome, 非容器):
+# AdGuard 已迁到 Mac 宿主(launchd 服务 com.<user>.adguardhome, 非容器):
 #   容器发布端口会把所有入站 DNS NAT 成同一网关 IP(192.168.164.1), AdGuard 看不到
 #   真实设备, 看板「域名访问」永远 1 客户端; 宿主直绑 53 保留真实客户端 IP。
 #   安装/数据在 ~/Applications/AdGuardHome/(二进制+conf+work), launchd 配置在
-#   ~/Library/LaunchAgents/com.erishen.adguardhome.plist(登录自启, 崩溃自动拉起)。
+#   ~/Library/LaunchAgents/com.<user>.adguardhome.plist(登录自启, 崩溃自动拉起)。
 #   make adguard-up     启宿主服务(launchd bootstrap / kickstart)
 #   make adguard-down   停宿主服务(launchd bootout)
 #   make adguard-log    看宿主服务日志(~/Applications/AdGuardHome/agh.log)
 #   make dns-fetch dns-watch     抓一次查询日志 → .data/dns.json(配了才自动, 不配也不崩)
 # 让家里设备 DNS「首选」指 <本机IP>:53(AdGuard)、「备用」填 223.5.5.5; 本机不开时设备落到备用, 不断网。
 # 宿主 web 端口走 ADGUARD_PORT(默认 10095, >10000 约定); 覆盖: make adguard-up ADGUARD_PORT=11095。
-PLIST ?= $(HOME)/Library/LaunchAgents/com.erishen.adguardhome.plist
+# launchd 服务名: 公开默认通用示例, 本机实际名字放 .env 覆盖(ADGUARD_LABEL=com.你的用户名.adguardhome)。
+ADGUARD_LABEL ?= com.<user>.adguardhome
+PLIST ?= $(HOME)/Library/LaunchAgents/$(ADGUARD_LABEL).plist
 adguard-up:
 	@echo "▶ 起 AdGuard 宿主服务(控制台 http://127.0.0.1:$(ADGUARD_PORT), DNS 53)…"
-	@launchctl bootstrap gui/$$(id -u) $(PLIST) 2>/dev/null || launchctl kickstart -k gui/$$(id -u)/com.erishen.adguardhome
+	@launchctl bootstrap gui/$$(id -u) $(PLIST) 2>/dev/null || launchctl kickstart -k gui/$$(id -u)/$(ADGUARD_LABEL)
 	@echo "  launchd 管理(登录自启); 跑 make dns-fetch dns-watch 看记录"
 
 adguard-down:
-	@launchctl bootout gui/$$(id -u)/com.erishen.adguardhome 2>/dev/null || true
+	@launchctl bootout gui/$$(id -u)/$(ADGUARD_LABEL) 2>/dev/null || true
 	@echo "已停 AdGuard 宿主服务"
 
 adguard-log:
@@ -127,16 +132,16 @@ dns-fetch:
 	@$(PY) scripts/adguard_fetch.py
 
 # 实时监听 AdGuard 新客户端(定位「设备 DNS 走没走 AdGuard」):
-# 跑着它, 然后在某台设备(如 iQOO)上随便刷个网页, 终端立刻显示那台设备的 IP 进来没。
-# 宿主 AdGuard 下: 192.168.3.x = 真实局域网设备(Mac 自己是 192.168.3.57);
-# 192.168.164.1 只剩 OrbStack 里其他容器的 DNS 转发流量。
+# 跑着它, 然后在某台设备(如一台手机)上随便刷个网页, 终端立刻显示那台设备的 IP 进来没。
+# 宿主 AdGuard 下: 192.168.1.x = 真实局域网设备(示例);
+# 192.168.164.1 = Docker NAT 网段里其他容器的 DNS 转发流量(示例)。
 dns-watch:
 	@$(PY) scripts/dns_watch.py
 
 # ---- MAC 黑名单(拉黑/解除成对; 拉黑=断网, 网关/关键设备/备注设备默认拒绝, --force 覆盖) ----
 # 每个命令 1 次登录, 别连发(限流冷却 5min)。预演加 EXTRA='--dry-run'。
-#   make block TARGET=192.168.3.99 EXTRA='--reason "陌生设备" --force'  (网关/关键/备注才需 --force)
-#   make unblock TARGET=192.168.3.99
+#   make block TARGET=192.168.1.99 EXTRA='--reason "陌生设备" --force'  (网关/关键/备注才需 --force)
+#   make unblock TARGET=192.168.1.99
 #   make block-list
 EXTRA ?=
 block:

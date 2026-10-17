@@ -10,7 +10,7 @@
 #        路由器/流量/终端在容器内循环更新; arp 快照仍靠宿主(容器无宿主网卡)。
 #
 # AdGuard Home(DNS 记录「谁访问了什么域名」)已迁出容器 → Mac 宿主 launchd 服务
-#   (com.erishen.adguardhome, 见 ~/Library/LaunchAgents/ + ~/Applications/AdGuardHome/)。
+#   (com.<user>.adguardhome, 见 ~/Library/LaunchAgents/ + ~/Applications/AdGuardHome/)。
 #   原因: 容器发布端口会把所有入站 DNS NAT 成同一个网关 IP, AdGuard 看不到真实
 #   设备, 看板「域名访问」永远只显示 1 客户端; 宿主直绑 53 保留真实客户端 IP。
 #   起停: make adguard-up / adguard-down; 控制台 http://127.0.0.1:10095 (ADGUARD_PORT)。
@@ -18,7 +18,7 @@
 #
 # 凭据/端口: compose 自动读当前目录 .env 做变量替换(ROUTER_PASS/WEBHOOK_URL 等不进镜像)。
 #
-# 网络: Mac 的 Docker Desktop 默认 NAT 通常能直达 192.168.3.1(你的路由器)。
+# 网络: Mac 的 Docker Desktop 默认 NAT 通常能直达 192.168.1.1(你的路由器)。
 #       若连不通, 改用 Linux host 网络: 在 services.lume-lan 加
 #       network_mode: host(并去掉 ports), 且 REFRESH=1。
 
@@ -41,7 +41,7 @@ services:
       # 路由器 / 告警推送凭据: 仅在 REFRESH=1 时容器才需要, 默认只 serve 模式不注入,
       # 避免凭据进入容器环境(容器被攻破也拿不到路由器密码/webhook 密钥)。
       # 需要容器内自刷新时再打开:
-      # ROUTER_HOST: "192.168.3.1"
+      # ROUTER_HOST: "192.168.1.1"
       # ROUTER_USER: "admin"
       # ROUTER_PASS: "${ROUTER_PASS:-}"
       # WEBHOOK_URL: "${WEBHOOK_URL:-}"

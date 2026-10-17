@@ -11,8 +11,8 @@ lume-core 没有 exec/子进程内置，所以「取设备」的真实系统调�
 
 输出（.data/devices.json）：
   {
-    "gateway": "192.168.3.1",
-    "subnet": "192.168.3.0/24",
+    "gateway": "192.168.1.1",
+    "subnet": "192.168.1.0/24",
     "scanned_at": 1700000000,
     "sweep": true,
     "devices": [ {"ip","mac","iface","live","source"} ]
@@ -104,7 +104,7 @@ def _same_lan(ip: str, host_ips: dict, prefix: int = 16) -> bool:
 
 def _gateway_from_arp(host_ips: dict = None) -> str:
     """兜底：macOS arp -a 里网关那条带 ifscope 标记（如
-    "? (192.168.3.1) at c4:6:8:… on en0 ifscope [ethernet]"）。
+    "? (192.168.1.1) at c4:6:8:… on en0 ifscope [ethernet]"）。
 
     注意 ifscope 会有多条——广播条目（.0，MAC ff:ff:ff:ff:ff:ff）与真网关
     （MAC 是真实单播）。route 被 OS 拦时用它：取「物理接口上、与本机同网段、
@@ -195,9 +195,9 @@ def arp_snapshot() -> list:
         out = subprocess.run(["arp", "-a"], capture_output=True, text=True, timeout=10).stdout
     except Exception:
         return []
-    # macOS:  ? (192.168.3.1) at c4:6:83:71:74:4 on en0 ifscope [ethernet]
-    #         192.168.3.1 at (incomplete) on en0
-    # Linux : 192.168.3.1 at c4:68:37:71:74:04 [ether] on en0
+    # macOS:  ? (192.168.1.1) at c4:6:83:71:74:4 on en0 ifscope [ethernet]
+    #         192.168.1.1 at (incomplete) on en0
+    # Linux : 192.168.1.1 at c4:68:37:71:74:04 [ether] on en0
     mac_re = re.compile(r"([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})")
     for line in out.splitlines():
         m_ip = re.search(r"\((\d+\.\d+\.\d+\.\d+)\)", line) or re.search(
@@ -290,9 +290,9 @@ def main():
 
 
 def detect_network(gw: str, prefix: int = 24) -> str:
-    """IP 所在网络地址（默认 /24）。192.168.3.1 → 192.168.3.0。
+    """IP 所在网络地址（默认 /24）。192.168.1.1 → 192.168.1.0。
 
-    旧实现误把后两段清零（192.168.3.1 → 192.168.0.0），导致看板网段显示错误、
+    旧实现误把后两段清零（192.168.1.1 → 192.168.0.0），导致看板网段显示错误、
     LAN_SWEEP 扫错网段；此处只清零最后一段，prefix 可放宽（如 /16 供同网段校验）。
     """
     from ipaddress import IPv4Network

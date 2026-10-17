@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""router_fetch.py — 从华为 WS5102(HiLink CAT) 后台抓路由器身份 + 终端列表/流量，写 .data/router.json。
+"""router_fetch.py — 从家用路由器(HiLink CAT) 后台抓路由器身份 + 终端列表/流量，写 .data/router.json。
 
-已逆向并验证的协议(固件 WS5102-10 SOC1200, 2026-10):
+已逆向并验证的协议(固件各型号略有差异, 2026-10):
   1. 免密身份层: GET /api/system/deviceinfo → 型号/序列号/OUI(无需登录)。
   2. 登录(简单 SHA256 路径, 与网页 SCRAM 路径的限流计数相互独立):
      a. GET  /html/index.html        → 会话 cookie + meta csrf_param/csrf_token
@@ -630,7 +630,7 @@ def check_alerts(devices: list, wan: dict, fetched_at: int) -> list:
 
 def main():
     env = load_env()
-    host = (env.get("ROUTER_HOST") or "192.168.3.1")
+    host = (env.get("ROUTER_HOST") or "192.168.1.1")
     if not host.startswith("http"):
         host = "http://" + host
     user = env.get("ROUTER_USER") or "admin"

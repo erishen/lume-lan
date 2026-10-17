@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """mac_block.py — 路由器 MAC 黑名单管理(拉黑 / 解除 / 名单)。
 
-数据面: 华为 WS5102 的 ntwk/wlanfilterenhance(每 SSID 一条, 含 MAC 准入开关 + 黑名单)。
+数据面: 家用路由器(HiLink) 的 ntwk/wlanfilterenhance(每 SSID 一条, 含 MAC 准入开关 + 黑名单)。
 本地留底: .data/blocklist.json —— 路由器重启会丢配置, 这份是"我们拉过谁"的账本,
 也是 UI 拉黑标记 / 恢复出厂后的重建依据。
 
 用法(make 目标见 Makefile):
-  make block 192.168.3.99            # 按 IP 拉黑(自动解析成 MAC; 记 reason)
+  make block 192.168.1.99            # 按 IP 拉黑(自动解析成 MAC; 记 reason)
   make block 84:9D:C2:72:7A:69       # 按 MAC 直接拉黑
-  make unblock 192.168.3.99          # 解除(从路由器黑名单 + 本地账本移除)
+  make unblock 192.168.1.99          # 解除(从路由器黑名单 + 本地账本移除)
   make block-list                     # 看当前名单(路由器实态 + 本地账本)
 
 安全闸(默认拒绝, --force 覆盖):
@@ -102,7 +102,7 @@ def _gateway_mac() -> str:
 
 def cmd(action: str, target: str, reason: str, force: bool, dry: bool):
     env = rf.load_env()
-    host = env.get("ROUTER_HOST", "192.168.3.1")
+    host = env.get("ROUTER_HOST", "192.168.1.1")
     if not host.startswith("http"):
         host = "http://" + host
     sess = rf.CatSession(host)

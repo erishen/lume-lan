@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """dns_watch.py — 实时监听 AdGuard 查询日志, 打印「新出现的客户端 IP」。
 
-用途: 你在某台设备(iQOO/iPhone)上随便刷个网页, 终端立刻显示这台设备的 IP
+用途: 你在某台设备(手机/平板)上随便刷个网页, 终端立刻显示这台设备的 IP
 进没进 AdGuard。用来定位「DNS 到底走没走 AdGuard」这类问题。
 
 零依赖(只读宿主 ADGUARD_HOST:ADGUARD_PORT/control/querylog, 关认证后免登录)。
 Ctrl+C 退出。已知客户端缓存在 .runtime/dns_watch_seen.json, 重启不重复刷。
 
 区分:
-  192.168.3.x   = 真实局域网设备(iQOO/iPhone/iPad 等, 你要找的就是这些)
-  192.168.164.1 = OrbStack 里其他容器的 DNS 转发流量(宿主 AdGuard 下仅此一种合并来源)
+  192.168.1.x   = 真实局域网设备(手机/平板等设备, 你要找的就是这些)
+  192.168.164.1 = Docker NAT 网段(示例) 里其他容器的 DNS 转发流量(宿主 AdGuard 下仅此一种合并来源)
 """
 import json
 import os
@@ -58,7 +58,7 @@ def main():
         except Exception:
             prev = {}
 
-    print(f"▶ 监听 AdGuard({host}:{port}) 客户端 …  现在去 iQOO 上随便刷个网页, 下面会实时打印新出现的 IP。Ctrl+C 退出")
+    print(f"▶ 监听 AdGuard({host}:{port}) 客户端 …  现在去任一台设备上随便刷个网页, 下面会实时打印新出现的 IP。Ctrl+C 退出")
     try:
         while True:
             entries = get_querylog(host, port)

@@ -36,7 +36,7 @@ Lume 服务端把它们做成 HTTP API，React 界面展示。
 
 ```
 .data/aliases.json      # 本地命名层({ip: 名字}), 已 gitignore, 不入库
-{ "192.168.3.36": "米兔故事机" }
+{ "192.168.1.100": "儿童故事机" }   # 示例: 换成你家真实设备 IP/名字
 ```
 
 直接编辑这个文件 + 点界面「刷新」即可改名，不用等路由器同步。
@@ -45,7 +45,7 @@ Lume 服务端把它们做成 HTTP API，React 界面展示。
 
 ```
 ┌─ 宿主（Mac）────────────────────────────────────────────┐
-│  launchd 60s 数据循环（com.erishen.lume-lan-refresh）     │
+│  launchd 60s 数据循环（com.<user>.lume-lan-refresh）     │
 │   scripts/scan_lan.py        arp -a → .data/devices.json │
 │   scripts/router_fetch.py    路由器登录态 → .data/router.json│
 │   scripts/adguard_fetch.py   DNS 记录 → .data/dns*.json   │
@@ -86,9 +86,9 @@ make docker-up        # = docker compose up -d
 
 - 采集循环：`~/.local/bin/... .runtime/refresh-once.sh` 每 60s 跑一轮
   （scan_lan → router_fetch → adguard_fetch），由 launchd 托管：
-  `~/Library/LaunchAgents/com.erishen.lume-lan-refresh.plist`
+  `~/Library/LaunchAgents/com.<user>.lume-lan-refresh.plist`
   （`StartInterval=60` + `RunAtLoad`，开机即起，日志写 `.runtime/refresh.log`）。
-- 注册（一次性）：`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.erishen.lume-lan-refresh.plist`
+- 注册（一次性）：`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.<user>.lume-lan-refresh.plist`
 - 手动跑一轮：`bash .runtime/refresh-once.sh`
 - 开发时替代：`make dev` 也会起 60s 后台循环（`make stop` 清理），两者互斥、不要同时开。
 
@@ -120,7 +120,7 @@ docker compose up -d
 
 - 多架构：`make docker-build-multiarch`（vendor/ 需同时含两种 arch）。
 - 静态版全静态链接，仍基于 `python:3.12-slim`（容器内可选刷新循环要 python3），非 `scratch`。
-- 网络：Mac 的 Docker Desktop 默认 NAT 通常能直达 `192.168.3.1`；连不通时改用 Linux host
+- 网络：Mac 的 Docker Desktop 默认 NAT 通常能直达 `192.168.1.1`（示例网段，以你家为准）；连不通时改用 Linux host
   网络（compose 注释里有 `network_mode: host` 说明）。
 
 ## 看板认证（Basic Auth）
@@ -139,7 +139,7 @@ make docker-redeploy  # 重部署后生效(htpasswd 只读挂载进容器)
 ## AdGuard Home（域名访问数据源）
 
 「域名访问」Tab 的数据来自 **AdGuard Home**，它已迁出容器、以 **Mac 宿主 launchd 服务**运行
-（`com.erishen.adguardhome`，见 `~/Library/LaunchAgents/` + `~/Applications/AdGuardHome/`）。
+（`com.<user>.adguardhome`，见 `~/Library/LaunchAgents/` + `~/Applications/AdGuardHome/`）。
 原因：容器发布端口会把所有入站 DNS NAT 成同一个网关 IP，AdGuard 看不到真实设备；
 宿主直绑 53 保留真实客户端 IP。
 
@@ -155,7 +155,7 @@ make adguard-log      # 看 AdGuard 日志
 ## 路由器层（识别「设备使用情况」）
 
 设备表默认只有 IP/MAC/网卡（本地 arp，认不出「是什么设备 / 谁在用」）。加一层
-**路由器后台**（你的网关是华为 WS5102，HiLink/CAT 协议，`http://192.168.3.1/`）：
+**路由器后台**（家用路由器，HiLink/CAT 协议，`http://<网关IP>/`，本仓库以 192.168.1.1 示例）：
 
 - **免密（始终可用）**：`/api/system/deviceinfo` → 型号 / 序列号 / 厂商，界面「路由器」区直接显示。
 - **登录态（需密码）**：终端列表 + 每设备流量 + 在线状态 + 最后活跃时间。

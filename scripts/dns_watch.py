@@ -8,8 +8,8 @@
 Ctrl+C 退出。已知客户端缓存在 .runtime/dns_watch_seen.json, 重启不重复刷。
 
 区分:
-  192.168.164.x = Mac 经 OrbStack/Docker NAT 的源 IP(你自己的测试流量)
   192.168.3.x   = 真实局域网设备(iQOO/iPhone/iPad 等, 你要找的就是这些)
+  192.168.164.1 = OrbStack 里其他容器的 DNS 转发流量(宿主 AdGuard 下仅此一种合并来源)
 """
 import json
 import os

@@ -181,6 +181,8 @@ export interface RouterPayload {
   router_wan?: WanStatus;
   /** 信号强度拓扑(device/topology: mac→{rssi,link_quality,access_type})。 */
   router_topology?: Record<string, TopoNode>;
+  /** 异常流量告警阈值(GB/近 1h, env LAN_ANOMALY_GB 可配, 默认 10)。 */
+  anomaly_gb?: number;
 }
 
 export async function apiGet<T>(url: string): Promise<T> {

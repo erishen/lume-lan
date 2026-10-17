@@ -1,4 +1,4 @@
-/* Lume LAN — 局域网设备看板样式(浅色,与 life-dash 卡片风格对齐) */
+/* Lume LAN — 局域网设备看板样式(浅色默认; 深色走 [data-theme="dark"] 覆盖) */
 :root {
   --fg: #1f2733;
   --muted: #64748b;
@@ -9,6 +9,35 @@
   --ok: #16a34a;
   --warn: #d97706;
   --off: #94a3b8;
+  /* 半透明底色用的 RGB 三元组(配合 rgba(var(--xxx-rgb), .x) 使用);
+   * 文本强调色(深色下换成浅一档, 保证对比度)。 */
+  --accent-rgb: 37, 99, 235;
+  --off-rgb: 120, 130, 150;
+  --warn-rgb: 217, 119, 6;
+  --red-rgb: 220, 38, 38;
+  --green-rgb: 22, 163, 74;
+  --warn-text: #92400e;
+  --warn-text-strong: #7c2d12;
+  --red-text: #b91c1c;
+}
+[data-theme="dark"] {
+  --fg: #e6ebf4;
+  --muted: #94a3b8;
+  --line: rgba(148, 163, 184, 0.24);
+  --bg: #0e1420;
+  --card: #171e2e;
+  --accent: #60a5fa;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --off: #64748b;
+  --accent-rgb: 96, 165, 250;
+  --off-rgb: 148, 163, 184;
+  --warn-rgb: 251, 191, 36;
+  --red-rgb: 248, 113, 113;
+  --green-rgb: 74, 222, 128;
+  --warn-text: #fbbf24;
+  --warn-text-strong: #fde68a;
+  --red-text: #fca5a5;
 }
 * { box-sizing: border-box; }
 body {
@@ -22,7 +51,7 @@ a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  background: rgba(120, 130, 150, 0.12);
+  background: rgba(var(--off-rgb), 0.12);
   padding: 1px 5px;
   border-radius: 4px;
   font-size: 0.9em;
@@ -47,6 +76,12 @@ nav.top .brand { font-weight: 700; font-size: 1.05rem; }
 nav.top a { color: var(--muted); padding: 2px 4px; }
 nav.top a.active { color: var(--fg); font-weight: 600; }
 nav.top .home-link { margin-left: auto; font-size: 0.9rem; }
+nav.top .theme-btn {
+  margin-left: 10px; font-size: 0.95rem; line-height: 1; padding: 5px 9px;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--card);
+  color: var(--muted); cursor: pointer;
+}
+nav.top .theme-btn:hover { color: var(--fg); border-color: rgba(var(--accent-rgb), 0.4); }
 
 /* KPI */
 .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 8px 0 14px; }
@@ -66,11 +101,11 @@ nav.top .home-link { margin-left: auto; font-size: 0.9rem; }
 .banner {
   padding: 8px 12px;
   border-radius: 8px;
-  background: rgba(37, 99, 235, 0.08);
+  background: rgba(var(--accent-rgb), 0.08);
   margin-bottom: 12px;
   font-size: 0.9rem;
 }
-.banner.warn { background: rgba(217, 119, 6, 0.12); color: #92400e; }
+.banner.warn { background: rgba(var(--warn-rgb), 0.12); color: var(--warn-text); }
 
 /* 工具条：单行不折行(搜索收缩 + 提示 ellipsis)，「只看在线」/筛选/刷新 稳定待在第一行 */
 .toolbar {
@@ -95,11 +130,13 @@ nav.top .home-link { margin-left: auto; font-size: 0.9rem; }
 /* 工具栏「激活筛选」指示器(类型/频段 chip 选中后显示, 可一键清除) */
 .filter-active {
   cursor: pointer; font: inherit; font-size: 0.78rem; color: var(--accent);
-  background: rgba(37, 99, 235, 0.1); border: 1px solid rgba(37, 99, 235, 0.3);
+  background: rgba(var(--accent-rgb), 0.1); border: 1px solid rgba(var(--accent-rgb), 0.3);
   border-radius: 6px; padding: 3px 8px; margin: 0 6px; display: inline-flex; align-items: center; gap: 6px;
 }
-.filter-active:hover { background: rgba(37, 99, 235, 0.18); }
+.filter-active:hover { background: rgba(var(--accent-rgb), 0.18); }
 .filter-clear { font-size: 0.7rem; opacity: 0.7; }
+/* 流量过滤提示(已隐藏 N 台累计流量 <1MB 的设备) */
+.filter-hint { flex: 0 0 auto; font-size: 0.72rem; color: var(--muted); white-space: nowrap; opacity: 0.85; }
 .btn {
   cursor: pointer;
   padding: 5px 14px;
@@ -123,11 +160,7 @@ table.devs td .devname { font-weight: 500; color: var(--fg); }
 table.devs td .devname::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 2px; background: var(--accent); margin-right: 6px; vertical-align: middle; }
 .dim { color: var(--muted); }
 .tag { display: inline-block; margin-left: 6px; font-size: 0.7rem; padding: 0 5px; border-radius: 5px; }
-.tag.gw { background: rgba(37, 99, 235, 0.15); color: var(--accent); }
-.iface { font-size: 0.85em; color: var(--muted); }
-.src { font-size: 0.75rem; padding: 1px 6px; border-radius: 5px; background: rgba(120, 130, 150, 0.12); color: var(--muted); }
-.src.sweep { background: rgba(22, 163, 74, 0.14); color: var(--ok); }
-.src.router { background: rgba(37, 99, 235, 0.14); color: var(--accent); }
+.tag.gw { background: rgba(var(--accent-rgb), 0.15); color: var(--accent); }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
 .dot.on { background: var(--ok); }
 .dot.idle { background: #d97706; }
@@ -151,8 +184,8 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .routerbox { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
 .routerhead { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
 .quicklinks { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 8px; }
-.qlink { font-size: 0.82rem; padding: 4px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--accent); background: rgba(37, 99, 235, 0.06); }
-.qlink:hover { background: rgba(37, 99, 235, 0.14); }
+.qlink { font-size: 0.82rem; padding: 4px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--accent); background: rgba(var(--accent-rgb), 0.06); }
+.qlink:hover { background: rgba(var(--accent-rgb), 0.14); }
 .qlink-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
 .routermodel { font-size: 1.05rem; font-weight: 700; }
 .routermeta { font-size: 0.82rem; color: var(--muted); }
@@ -163,16 +196,16 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .rtrdev-ip { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; min-width: 130px; }
 .rtrdev-host { flex: 1; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rtrdev-net { font-size: 0.82rem; color: var(--muted); white-space: nowrap; }
-.routernote { margin-top: 10px; font-size: 0.85rem; color: var(--muted); background: rgba(217, 119, 6, 0.08); border-radius: 8px; padding: 10px 12px; line-height: 1.6; }
+.routernote { margin-top: 10px; font-size: 0.85rem; color: var(--muted); background: rgba(var(--warn-rgb), 0.08); border-radius: 8px; padding: 10px 12px; line-height: 1.6; }
 .routernote.dim { background: none; padding: 0; }
 
 /* 登录失败/冷却中的沿用旧数据提示 */
 .rtrstale {
   margin: 8px 0 0;
   font-size: 0.8rem;
-  color: #92400e;
-  background: rgba(217, 119, 6, 0.1);
-  border: 1px solid rgba(217, 119, 6, 0.25);
+  color: var(--warn-text);
+  background: rgba(var(--warn-rgb), 0.1);
+  border: 1px solid rgba(var(--warn-rgb), 0.25);
   border-radius: 8px;
   padding: 7px 11px;
   line-height: 1.5;
@@ -185,23 +218,35 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .rtrtop-rank {
   width: 20px; height: 20px; flex: 0 0 20px; border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center;
-  font-size: 0.75rem; font-weight: 700; background: rgba(120, 130, 150, 0.14); color: var(--muted);
+  font-size: 0.75rem; font-weight: 700; background: rgba(var(--off-rgb), 0.14); color: var(--muted);
 }
 .rtrtop-rank.top { background: var(--warn); color: #fff; }
 .rtrtop-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .rtrtop-ip { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; color: var(--muted); }
-.rtrtop-vendor { font-size: 0.72rem; padding: 1px 6px; border-radius: 5px; background: rgba(37, 99, 235, 0.12); color: var(--accent); }
+.rtrtop-vendor { font-size: 0.72rem; padding: 1px 6px; border-radius: 5px; background: rgba(var(--accent-rgb), 0.12); color: var(--accent); }
 .rtrtop-live { font-size: 0.72rem; color: var(--ok); }
-.rtrtop-bar { flex: 0 0 90px; height: 8px; border-radius: 4px; background: rgba(120, 130, 150, 0.15); overflow: hidden; }
+.rtrtop-bar { flex: 0 0 90px; height: 8px; border-radius: 4px; background: rgba(var(--off-rgb), 0.15); overflow: hidden; }
 .rtrtop-bar > div { height: 100%; background: linear-gradient(90deg, var(--accent), #60a5fa); border-radius: 4px; }
 .rtrtop-net { flex: 0 0 auto; font-size: 0.78rem; color: var(--muted); white-space: nowrap; min-width: 120px; text-align: right; }
 .rtrtop-rate { flex: 0 0 auto; font-size: 0.72rem; color: var(--ok); white-space: nowrap; min-width: 70px; text-align: right; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .rtrtop-hint { font-size: 0.72rem; font-weight: 400; color: var(--muted); margin-left: 8px; }
+.rtrtop-win { margin-left: 8px; display: inline-flex; gap: 4px; vertical-align: middle; }
+.rtrtop-win button {
+  font-size: 0.72rem; line-height: 1.5; padding: 1px 8px;
+  border: 1px solid var(--line); border-radius: 9px;
+  background: var(--card); color: var(--muted); cursor: pointer;
+}
+.rtrtop-win button:hover { color: var(--fg); border-color: rgba(var(--accent-rgb), 0.4); }
+.rtrtop-win button.sel {
+  border-color: rgba(var(--accent-rgb), 0.5);
+  background: rgba(var(--accent-rgb), 0.1);
+  color: var(--accent);
+}
 
 /* 可点选设备行(Top5/终端): hover 高亮, 选中描边, 供点选看单设备流量曲线 */
 .rtrtop-row.click, .rtrdev.click { cursor: pointer; transition: background 0.12s; }
-.rtrtop-row.click:hover, .rtrdev.click:hover { background: rgba(37, 99, 235, 0.07); }
-.rtrtop-row.sel, .rtrdev.sel { background: rgba(37, 99, 235, 0.12); outline: 1px solid rgba(37, 99, 235, 0.35); outline-offset: -1px; border-radius: 6px; }
+.rtrtop-row.click:hover, .rtrdev.click:hover { background: rgba(var(--accent-rgb), 0.07); }
+.rtrtop-row.sel, .rtrdev.sel { background: rgba(var(--accent-rgb), 0.12); outline: 1px solid rgba(var(--accent-rgb), 0.35); outline-offset: -1px; border-radius: 6px; }
 
 /* 单设备流量曲线(PerDeviceChart): 副标题 + 末根柱高亮 */
 .perdev-sub { font-size: 0.75rem; font-weight: 400; color: var(--muted); margin-left: 6px; }
@@ -216,6 +261,7 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .dd-k { font-size: 0.72rem; color: var(--muted); }
 .dd-v { color: var(--fg); }
 .det-on { color: var(--ok); font-weight: 600; }
+.det-idle { color: #d97706; font-weight: 600; }
 .det-off { color: var(--muted); font-weight: 600; }
 
 /* 域名访问区(AdGuard DNS 记录): 全家域名排行 + 各设备解析记录 */
@@ -224,19 +270,20 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .dnstitle .rtrtop-hint { font-size: 0.72rem; font-weight: 400; color: var(--muted); }
 .dnstitle-link { font-size: 0.74rem; font-weight: 500; color: var(--accent); text-decoration: none; margin-left: auto; }
 .dnstitle-link:hover { text-decoration: underline; }
+.dnstitle .dns-export { flex: 0 0 auto; font-size: 0.72rem; padding: 2px 9px; }
 
 /* DNS 配置指引卡(怎么让设备走 AdGuard DNS, 可折叠) */
 .dnsguide { margin: 4px 0 10px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-.dnsguide-toggle { width: 100%; text-align: left; background: var(--panel2, rgba(120,130,150,0.06)); border: 0; padding: 8px 12px; font-size: 0.82rem; font-weight: 600; color: var(--fg); cursor: pointer; }
-.dnsguide-toggle:hover { background: rgba(37, 99, 235, 0.08); }
-.dnsguide-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; background: rgba(37, 99, 235, 0.03); }
+.dnsguide-toggle { width: 100%; text-align: left; background: var(--panel2, rgba(var(--off-rgb),0.06)); border: 0; padding: 8px 12px; font-size: 0.82rem; font-weight: 600; color: var(--fg); cursor: pointer; }
+.dnsguide-toggle:hover { background: rgba(var(--accent-rgb), 0.08); }
+.dnsguide-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; background: rgba(var(--accent-rgb), 0.03); }
 .dnsguide-step { display: flex; gap: 10px; align-items: flex-start; font-size: 0.85rem; }
 .dnsguide-num { flex: 0 0 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 0.78rem; font-weight: 700; display: flex; align-items: center; justify-content: center; margin-top: 1px; }
 .dnsguide-sub { margin-top: 3px; font-size: 0.78rem; color: var(--muted); line-height: 1.5; }
 .dnsguide-sub a { color: var(--accent); }
-.dnsguide-sub code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.74rem; background: rgba(120,130,150,0.12); padding: 1px 5px; border-radius: 4px; }
-.dnsguide-stale { font-size: 0.78rem; color: #b45309; background: rgba(217,119,6,0.1); border-radius: 6px; padding: 6px 10px; }
-.dnsstale { font-size: 0.72rem; color: #b45309; background: rgba(217, 119, 6, 0.12); padding: 1px 7px; border-radius: 5px; }
+.dnsguide-sub code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.74rem; background: rgba(var(--off-rgb),0.12); padding: 1px 5px; border-radius: 4px; }
+.dnsguide-stale { font-size: 0.78rem; color: var(--warn-text); background: rgba(var(--warn-rgb),0.1); border-radius: 6px; padding: 6px 10px; }
+.dnsstale { font-size: 0.72rem; color: var(--warn-text); background: rgba(var(--warn-rgb), 0.12); padding: 1px 7px; border-radius: 5px; }
 .dnsoff { font-size: 0.82rem; color: var(--muted); padding: 4px 0; }
 .dnstop { margin-top: 6px; }
 .dnstop-title { font-size: 0.8rem; font-weight: 600; margin-bottom: 6px; color: var(--fg); display: flex; align-items: baseline; gap: 6px; }
@@ -244,61 +291,61 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .dnstop-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 0.85rem; }
 .dnstop-row.blocked { opacity: 0.75; }
 .dnstop-dom { flex: 0 1 auto; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-.dnstop-bar { flex: 1 1 auto; min-width: 40px; height: 7px; border-radius: 4px; background: rgba(120, 130, 150, 0.15); overflow: hidden; }
+.dnstop-bar { flex: 1 1 auto; min-width: 40px; height: 7px; border-radius: 4px; background: rgba(var(--off-rgb), 0.15); overflow: hidden; }
 .dnstop-bar > div { height: 100%; background: var(--accent); }
 .dnstop-row.blocked .dnstop-bar > div { background: #dc2626; }
 .dnstop-cnt { flex: 0 0 auto; font-size: 0.76rem; color: var(--muted); min-width: 52px; text-align: right; }
-.dnstop-blk { flex: 0 0 auto; font-size: 0.7rem; color: #dc2626; font-weight: 600; }
+.dnstop-blk { flex: 0 0 auto; font-size: 0.7rem; color: var(--red-text); font-weight: 600; }
 .dnsclients { margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
-.dnsclient { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--panel2, rgba(120,130,150,0.05)); }
-.dnsclient.sel { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15); }
+.dnsclient { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--panel2, rgba(var(--off-rgb),0.05)); }
+.dnsclient.sel { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.15); }
 .dnsclient-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
 .dnsc-client-name { font-weight: 600; font-size: 0.85rem; }
 .dnsc-ip { font-size: 0.74rem; color: var(--muted); }
 .dnsc-stat { margin-left: auto; font-size: 0.72rem; color: var(--muted); }
 .dnsc-domains { display: flex; flex-wrap: wrap; gap: 5px; }
-.dnsc-dom { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.76rem; padding: 1px 7px; border-radius: 5px; background: rgba(37, 99, 235, 0.1); color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.dnsc-dom { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.76rem; padding: 1px 7px; border-radius: 5px; background: rgba(var(--accent-rgb), 0.1); color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .dnsc-dom em { font-style: normal; color: var(--muted); margin-left: 4px; font-size: 0.7rem; }
-.dnsc-dom.blocked { background: rgba(220, 38, 38, 0.12); color: #dc2626; }
+.dnsc-dom.blocked { background: rgba(var(--red-rgb), 0.12); color: var(--red-text); }
 .dns-select-note { margin-top: 8px; font-size: 0.78rem; }
 
 /* WAN 状态卡(默认连接/接入方式/IPv4/IPv6/DNS/NAT/带宽峰值) */
 .wancard { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; }
 .wan-title { font-size: 0.82rem; font-weight: 600; color: var(--fg); margin-bottom: 8px; }
-.wan-status { display: inline-flex; align-items: center; gap: 6px; font-size: 0.9rem; font-weight: 600; padding: 3px 10px; border-radius: 8px; background: rgba(22,163,74,0.14); color: var(--ok); }
-.wan-status.down { background: rgba(220,38,38,0.14); color: var(--warn); }
+.wan-status { display: inline-flex; align-items: center; gap: 6px; font-size: 0.9rem; font-weight: 600; padding: 3px 10px; border-radius: 8px; background: rgba(var(--green-rgb),0.14); color: var(--ok); }
+.wan-status.down { background: rgba(var(--red-rgb),0.14); color: var(--warn); }
 .wan-grid { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 0.82rem; }
 .wan-cell { color: var(--muted); }
 .wan-cell b { color: var(--fg); font-weight: 600; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 /* RSSI 信号强度柱(终端列表右侧, 3 段) */
 .rssi { display: inline-flex; align-items: flex-end; gap: 1px; }
-.rssi i { width: 3px; border-radius: 1px; background: rgba(120,130,150,0.3); }
+.rssi i { width: 3px; border-radius: 1px; background: rgba(var(--off-rgb),0.3); }
 .rssi i:nth-child(1) { height: 4px; }
 .rssi i:nth-child(2) { height: 7px; }
 .rssi i:nth-child(3) { height: 10px; }
 .rssi.good i { background: var(--ok); }
 .rssi.mid i { background: #d97706; }
 .rssi.bad i { background: var(--warn); }
-.rssi.none i { background: rgba(120,130,150,0.5); }
+.rssi.none i { background: rgba(var(--off-rgb),0.5); }
 .rssi.wired { display: none; }
 
 /* 异常流量告警 */
-.alert { margin-top: 12px; border: 1px solid rgba(220,38,38,0.4); background: rgba(220,38,38,0.08); color: #b91c1c; border-radius: 8px; padding: 8px 12px; font-size: 0.85rem; line-height: 1.5; }
+.alert { margin-top: 12px; border: 1px solid rgba(var(--red-rgb),0.4); background: rgba(var(--red-rgb),0.08); color: var(--red-text); border-radius: 8px; padding: 8px 12px; font-size: 0.85rem; line-height: 1.5; }
 
 /* 导出 CSV 按钮(工具栏右侧, 紧跟刷新) */
 .btn.ghost { background: none; color: var(--accent); border: 1px solid var(--line); }
-.btn.ghost:hover { background: rgba(37,99,235,0.08); }
+.btn.ghost:hover { background: rgba(var(--accent-rgb),0.08); }
 
 /* 家庭流量趋势(纯 div 柱状图) */
 .trend { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; }
 .trend-title { font-size: 0.82rem; font-weight: 600; color: var(--fg); margin-bottom: 8px; }
-.trend-bars { display: flex; align-items: flex-end; gap: 2px; height: 96px; padding: 4px; background: rgba(120, 130, 150, 0.06); border-radius: 8px; overflow: hidden; }
+.trend-bars { display: flex; align-items: flex-end; gap: 2px; height: 96px; padding: 4px; background: rgba(var(--off-rgb), 0.06); border-radius: 8px; overflow: hidden; }
 .trendbar { flex: 1; min-width: 2px; height: 100%; background: linear-gradient(180deg, #60a5fa, var(--accent)); border-radius: 2px 2px 0 0; transition: height .3s; }
-.trendbar.zero { background: rgba(120, 130, 150, 0.25); }
+.trendbar.zero { background: rgba(var(--off-rgb), 0.25); }
 .trendbar.peak { background: linear-gradient(180deg, #fb7185, var(--warn)); }
-.trend-peak { font-size: 0.8rem; color: #92400e; background: rgba(217, 119, 6, 0.1); border: 1px solid rgba(217, 119, 6, 0.25); border-radius: 8px; padding: 6px 10px; margin-bottom: 8px; line-height: 1.5; }
-.trend-peak b { color: #7c2d12; }
+.trend-peak { font-size: 0.8rem; color: var(--warn-text); background: rgba(var(--warn-rgb), 0.1); border: 1px solid rgba(var(--warn-rgb), 0.25); border-radius: 8px; padding: 6px 10px; margin-bottom: 8px; line-height: 1.5; }
+.trend-peak b { color: var(--warn-text-strong); }
 .trend-peak-ip { font-size: 0.75rem; color: var(--muted); margin-left: 6px; }
 .trend-axis { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 0.72rem; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .trend-axis span:nth-child(2) { font-family: inherit; }
@@ -307,9 +354,9 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .rtrdist { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .rtrdist-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .rtrdist-label { font-size: 0.78rem; color: var(--muted); min-width: 56px; }
-.rtrdist-chip { font-size: 0.75rem; padding: 2px 8px; border-radius: 6px; background: rgba(120, 130, 150, 0.12); color: var(--fg); }
-.rtrdist-chip.g5 { background: rgba(22, 163, 74, 0.14); color: var(--ok); }
-.rtrdist-chip.g24 { background: rgba(37, 99, 235, 0.14); color: var(--accent); }
+.rtrdist-chip { font-size: 0.75rem; padding: 2px 8px; border-radius: 6px; background: rgba(var(--off-rgb), 0.12); color: var(--fg); }
+.rtrdist-chip.g5 { background: rgba(var(--green-rgb), 0.14); color: var(--ok); }
+.rtrdist-chip.g24 { background: rgba(var(--accent-rgb), 0.14); color: var(--accent); }
 /* chip 可点击(设备类型/Wi-Fi 频段筛选器): 选中态高亮, 再点取消 */
 .rtrdist-btn { cursor: pointer; font: inherit; border: 1px solid transparent; transition: all .15s; }
 .rtrdist-btn:hover { border-color: var(--line); }
@@ -326,8 +373,8 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .rtrdev.off { opacity: 0.55; }
 .rtrdev-ip { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; min-width: 128px; }
 .rtrdev-host { flex: 1; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rtrdev-vendor { flex: 0 0 auto; font-size: 0.72rem; padding: 1px 6px; border-radius: 5px; background: rgba(37, 99, 235, 0.12); color: var(--accent); }
-.rtrdev-tag { flex: 0 0 auto; font-size: 0.7rem; padding: 1px 6px; border-radius: 5px; background: rgba(217, 119, 6, 0.16); color: #92400e; }
+.rtrdev-vendor { flex: 0 0 auto; font-size: 0.72rem; padding: 1px 6px; border-radius: 5px; background: rgba(var(--accent-rgb), 0.12); color: var(--accent); }
+.rtrdev-tag { flex: 0 0 auto; font-size: 0.7rem; padding: 1px 6px; border-radius: 5px; background: rgba(var(--warn-rgb), 0.16); color: var(--warn-text); }
 .rtrdev-net { flex: 0 0 auto; font-size: 0.8rem; color: var(--muted); white-space: nowrap; }
 .rtrdev-last { flex: 0 0 auto; font-size: 0.75rem; color: var(--muted); white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .rtrdev-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--off); }
@@ -338,6 +385,30 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .rtrdev-state.st-idle { color: #d97706; }
 .rtrdev-state.st-off { color: var(--muted); }
 .rtrtop-live.idle { color: #d97706; }
+
+/* Tab 分区(总览 / 设备 / 域名访问): 横向切换 + 计数角标 + 右侧全局刷新 */
+.tabs { display: flex; align-items: center; gap: 6px; margin: 8px 0 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.tab { font: inherit; font-size: 0.9rem; padding: 8px 14px; border: 1px solid transparent; border-bottom: none; border-radius: 8px 8px 0 0; background: none; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: color .12s, background .12s; }
+.tab:hover { color: var(--fg); background: rgba(var(--accent-rgb), 0.06); }
+.tab.sel { color: var(--fg); font-weight: 700; background: var(--card); border-color: var(--line); border-bottom-color: var(--card); }
+.tab .badge { font-size: 0.72rem; font-weight: 700; padding: 1px 8px; border-radius: 10px; background: rgba(var(--accent-rgb), 0.12); color: var(--accent); line-height: 1.5; }
+.tab.sel .badge { background: var(--accent); color: #fff; }
+.tabs-spacer { flex: 1 0 0; min-width: 4px; }
+.tabs .hint { font-size: 0.8rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tabpanel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
+
+/* 总览: 完整终端列表入口提示(列表本体移入「设备」Tab) */
+.rtrdevs-hint { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; font-size: 0.8rem; color: var(--muted); }
+
+/* 统一设备表(富信息行): 行点击选中 + 离线半透明 + 状态/IP/流量列细节 */
+table.devs tr.click { cursor: pointer; }
+table.devs tr.click:hover td { background: rgba(var(--accent-rgb), 0.07); }
+table.devs tr.sel td { background: rgba(var(--accent-rgb), 0.12); }
+table.devs tr.sel { outline: 1px solid rgba(var(--accent-rgb), 0.35); outline-offset: -1px; }
+table.devs tr.row-off td { opacity: 0.55; }
+table.devs td.st { white-space: nowrap; }
+table.devs td.ip { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; }
+table.devs td.net { font-size: 0.82rem; color: var(--muted); white-space: nowrap; }
 
 /* 页脚 */
 footer.foot { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 0.82rem; color: var(--muted); display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }

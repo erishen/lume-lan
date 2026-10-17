@@ -51,24 +51,35 @@ function isActive(d: RouterDevice): boolean {
   return delta === undefined || delta === null ? true : delta >= 1048576;
 }
 
-/* 设备行:IP / 设备名(路由器 HostName/厂商,按 IP 关联) / MAC / 网卡 / 来源 / 在线态。
- * state: 3 态(与终端列表一致)on=在线·活跃 idle=在线·挂起 off=离线; 缺省从 live 推断。 */
-function DeviceRow({ ip, mac, iface, source, live, gateway, name, state }: {
-  ip: string; mac: string; iface?: string; source?: string; live?: boolean; gateway?: boolean; name?: string;
-  state?: "on" | "idle" | "off";
-}): React.ReactElement {
-  const st = state ?? (live === false ? "off" : "on");
+/* 统一设备行(设备表用): ARP 快照(本机 make scan)+ 路由器全量终端(在线+离线)合并,
+ * 附路由器侧富字段(厂商/类型/信号/流量/频段)。state 3 态(与终端列表一致):
+ * on=在线·活跃 idle=在线·挂起 off=离线。行点击 = 选中看详情/单设备曲线。 */
+interface LanRow {
+  ip: string; mac: string; iface?: string; source?: string; live?: boolean;
+  gateway?: boolean; name?: string; vendor?: string; icon?: string; freq?: string;
+  rssi?: number | null; link_quality?: string; wired?: boolean | null; guest?: boolean;
+  rx?: number; tx?: number; last_seen?: string; state: "on" | "idle" | "off";
+}
+
+function DeviceRow({ d, selIp, onSelect }: { d: LanRow; selIp: string; onSelect: (ip: string) => void }): React.ReactElement {
+  const st = d.state;
   return (
-    <tr className={"row-" + st}>
-      <td className="ip">{ip}{gateway ? <span className="tag gw">网关</span> : null}</td>
-      <td>{name ? <span className="devname" title={name}>{name}</span> : <span className="dim">—</span>}</td>
-      <td className="mono">{mac || <span className="dim">—</span>}</td>
-      <td>{iface ? <span className="iface">{iface}</span> : <span className="dim">—</span>}</td>
-      <td><span className={"src src-" + (source || "arp")}>{source === "router" ? "路由器" : source === "sweep" ? "Ping" : "ARP"}</span></td>
+    <tr className={"row-" + st + (selIp === d.ip ? " sel" : " click")} onClick={() => onSelect(d.ip)}>
+      <td className="st">
+        <span className={"dot " + st} />
+        {st === "off" ? "离线" : st === "idle" ? "挂起中" : "活跃"}
+      </td>
+      <td className="ip">{d.ip}{d.gateway ? <span className="tag gw">网关</span> : null}</td>
       <td>
-        {st === "off" ? <><span className="dot off" />离线</>
-          : st === "idle" ? <><span className="dot idle" />在线·挂起</>
-          : <><span className="dot on" />在线</>}
+        {d.name ? <span className="devname" title={d.name}>{d.name}</span> : <span className="dim">—</span>}
+        {d.vendor ? <span className="rtrdev-vendor">{d.vendor}</span> : null}
+        {d.guest ? <span className="rtrdev-tag">访客</span> : null}
+      </td>
+      <td className="mono">{d.mac || <span className="dim">—</span>}</td>
+      <td className="net">
+        {d.rx !== undefined || d.tx !== undefined
+          ? <>↓{fmtBytes(d.rx)} · ↑{fmtBytes(d.tx)}</>
+          : <span className="dim">—</span>}
       </td>
     </tr>
   );
@@ -200,19 +211,23 @@ function PerDeviceChart({ device, rows, max, win }: {
 /* 单设备详情卡: 点选设备时展示它的全部字段(MAC/厂商/类型/频段/信号/接入方式/
  * 在线态/最后活跃/累计流量/近 1h 增量/平均速率)。曲线没有历史时这里兜底,
  * 保证「点一下总能看到这台设备的具体情况」。 */
-function DeviceDetail({ d, name }: { d: RouterDevice; name: string }): React.ReactElement {
+function DeviceDetail({ d, name, row }: { d: RouterDevice; name: string; row?: LanRow }): React.ReactElement {
   const typeLabel: Record<string, string> = { mobile: "手机", laptop: "笔记本", computer: "电脑", television: "电视", tablet: "平板", android: "Android" };
   const cells: [string, React.ReactNode][] = [
-    ["设备名", name || d.mac],
+    ["设备名", <>{name || d.mac}{d.guest ? <span className="rtrdev-tag">访客</span> : null}</>],
     ["MAC", <span className="mono">{d.mac || "—"}</span>],
+    ["网卡", row?.iface || "—"],
     ["厂商", d.vendor || "—"],
     ["类型", d.icon ? (typeLabel[d.icon] || d.icon) : "—"],
     ["频段", d.freq || "—"],
     ["信号", d.access_type === "Wireless" ? <Rssi rssi={d.rssi} linkQuality={d.link_quality} /> : d.access_type === "Ethernet" ? "有线" : "—"],
+    ["来源", row ? (row.source === "router" ? "路由器" : row.source === "sweep" ? "Ping" : "ARP") : "—"],
     ["最后活跃", d.last_seen ? <span className="mono">{d.last_seen.slice(5, 16)}</span> : "—"],
     ["累计 下载/上传", <span className="mono">↓{fmtBytes(d.rx_bytes)} · ↑{fmtBytes(d.tx_bytes)}</span>],
     ["近 1h 增量", d.delta_1h !== undefined && d.delta_1h !== null ? <span className="mono">{fmtBytes(d.delta_1h)}（≈{fmtBytes(Math.round(d.delta_1h / 3600))}/s）</span> : "—"],
-    ["状态", d.online ? <span className="det-on">{d.delta_1h !== null && d.delta_1h !== undefined && d.delta_1h >= 1048576 ? "活跃" : "挂起中"}</span> : <span className="det-off">离线</span>],
+    ["状态", row
+      ? <span className={row.state === "on" ? "det-on" : row.state === "idle" ? "det-idle" : "det-off"}>{row.state === "off" ? "离线" : row.state === "idle" ? "挂起中" : "活跃"}</span>
+      : d.online ? <span className="det-on">{d.delta_1h !== null && d.delta_1h !== undefined && d.delta_1h >= 1048576 ? "活跃" : "挂起中"}</span> : <span className="det-off">离线</span>],
   ];
   return (
     <div className="devdetail">
@@ -380,6 +395,24 @@ function DnsPanel({ dns, ipNames, hostIp }: {
   const clients = dns.clients || {};
   const clientIps = Object.keys(clients).sort((a, b) => (clients[b]?.total ?? 0) - (clients[a]?.total ?? 0));
   const top = dns.top_domains || [];
+  /* 导出近 1h DNS 记录为 CSV(域名 Top + 各客户端查询量), 与设备列表导出一致。 */
+  const exportDnsCsv = () => {
+    const esc = (v: unknown) => {
+      const s = v === undefined || v === null ? "" : String(v);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const rows: string[][] = [
+      ["类型", "名称", "次数", "被拦截"],
+      ...top.map((t) => ["域名", t.domain, String(t.count ?? 0), String(t.blocked ?? 0)]),
+      ...clientIps.map((ip) => ["客户端", ipNames.get(ip) || ip, String(clients[ip]?.total ?? 0), String(clients[ip]?.blocked ?? 0)]),
+    ];
+    const blob = new Blob([rows.map((r) => r.map(esc).join(",")).join("\n")], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "lume-lan-dns-" + new Date().toISOString().slice(0, 10) + ".csv";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+  };
   return (
     <div className="dnsbox">
       <div className="dnstitle">
@@ -387,6 +420,7 @@ function DnsPanel({ dns, ipNames, hostIp }: {
         <span className="rtrtop-hint">· 近 1h · {dns.query_count ?? 0} 次查询 · {dns.client_count ?? 0} 客户端</span>
         {!dns.reachable ? <span className="dnsstale">⏳ AdGuard 未连接（沿用上次的记录）</span> : null}
         <a href={ADGUARD_URL} target="_blank" rel="noreferrer" className="dnstitle-link">控制台 ↗</a>
+        <button className="btn ghost dns-export" onClick={exportDnsCsv} title="导出近 1h DNS 记录为 CSV(域名+客户端)">导出 CSV</button>
       </div>
       <DnsGuide dns={dns} dnsTarget={dnsTarget} />
       <DnsTopList top={top} />
@@ -404,6 +438,11 @@ function Dashboard(): React.ReactElement {
   const [typeFilter, setTypeFilter] = React.useState("");
   const [freqFilter, setFreqFilter] = React.useState("");
   const [lastFetch, setLastFetch] = React.useState<number>(0);
+  /* 刷新反馈态: 点击「刷新」期间按钮转「刷新中…」并禁用, 避免慢接口(router-traffic
+   * 260KB 历史)期间界面看起来毫无反应。 */
+  const [refreshing, setRefreshing] = React.useState(false);
+  /* Tab 分区: 总览(网络/流量/排行) / 设备(统一设备表+详情) / 域名访问(DNS 记录) */
+  const [tab, setTab] = React.useState<"overview" | "devices" | "dns">("overview");
   /* 单设备流量趋势: 点选某台设备(Top5/终端行)看它近 5h 自己的曲线 */
   const [selIp, setSelIp] = React.useState<string>("");
   const [rtrTraffic, setRtrTraffic] = React.useState<RouterTrafficPayload | null>(null);
@@ -411,21 +450,31 @@ function Dashboard(): React.ReactElement {
 
   const load = React.useCallback(async () => {
     setErr("");
+    setRefreshing(true);
+    /* 主数据: devices 快照决定 KPI/空态, 先单独等它到账再渲染。 */
     try {
-      const [d, ro, rt, dn] = await Promise.all([
-        apiDevices(),
-        apiRouter().catch(() => null),
-        apiRouterTraffic().catch(() => null),
-        apiDns().catch(() => null),
-      ]);
+      const d = await apiDevices();
       setData(d);
-      setRouter(ro);
-      setRtrTraffic(rt);
-      setDns(dn);
-      setLastFetch(Date.now());
     } catch (e) {
       setErr((e as Error).message);
     }
+    /* 其余三个并行拉取、各自到位各自渲染: 慢接口(尤其 router-traffic 的 260KB
+     * 每设备历史)不再用 Promise.all 阻塞整批刷新; 每个最多等 6s, 超时忽略(降级 null)。 */
+    const withTimeout = <T,>(p: Promise<T>, ms: number): Promise<T | null> =>
+      new Promise<T | null>((res) => {
+        const t = setTimeout(() => res(null), ms);
+        p.then((v) => { clearTimeout(t); res(v); }).catch(() => { clearTimeout(t); res(null); });
+      });
+    const [ro, rt, dn] = await Promise.all([
+      withTimeout(apiRouter(), 6000),
+      withTimeout(apiRouterTraffic(), 8000), // 该接口 ~5s/260KB, 单独放宽避免超时降级
+      withTimeout(apiDns(), 6000),
+    ]);
+    if (ro) setRouter(ro);
+    if (rt) setRtrTraffic(rt);
+    if (dn) setDns(dn);
+    setLastFetch(Date.now());
+    setRefreshing(false);
   }, []);
 
   React.useEffect(() => {
@@ -476,36 +525,58 @@ function Dashboard(): React.ReactElement {
     return m;
   }, [data, router]);
 
-  /* 合并列表:ARP 本机快照 + 路由器在线设备(不在 ARP 表里的补进来, source=router)。
-   * 这样「在线设备」不再受限于本机 arp 缓存,而是全网在线都可见。 */
-  const shown = React.useMemo(() => {
-    if (!data) return [];
-    const list = [...data.devices];
-    /* 只要路由器有终端数据(不管登录态是新鲜还是 stale/冷却)就合并。 */
-    const rdevs = router?.router_devices;
-    if (rdevs && rdevs.length > 0) {
-      const arpIps = new Set(list.map((d) => d.ip));
-      for (const rd of rdevs) {
-        if (!rd.online || !rd.ip || arpIps.has(rd.ip)) continue;
+  /* 统一设备表行:ARP 本机快照 + 路由器全量终端(在线+离线都并入, source=router)。
+   * 每行附路由器富字段(厂商/类型/频段/信号/流量), 供「设备」Tab 的富信息表用。
+   * 排序:在线·活跃/挂起在前, 离线在后(各自保持内部顺序)。 */
+  /* 被流量过滤隐藏的设备数(供列表工具条提示「已隐藏 N 台」)。 */
+  const hiddenLowRef = React.useRef(0);
+  const deviceRows = React.useMemo(() => {
+    if (!data) return [] as LanRow[];
+    const list: LanRow[] = data.devices.map((d) => {
+      const rd = router?.router_devices?.find((r) => r.ip === d.ip);
+      return {
+        ip: d.ip, mac: d.mac, iface: d.iface, source: d.source, live: d.live,
+        gateway: d.gateway,
+        name: ipNames.get(d.ip) || "",
+        vendor: rd?.vendor, icon: rd?.icon, freq: rd?.freq,
+        rssi: rd?.rssi, link_quality: rd?.link_quality, wired: rd?.wired,
+        guest: rd?.guest, rx: rd?.rx_bytes, tx: rd?.tx_bytes, last_seen: rd?.last_seen,
+        state: ipState.get(d.ip) || (d.live ? "on" : "off"),
+      };
+    });
+    const arpIps = new Set(data.devices.map((d) => d.ip));
+    if (router?.router_devices) {
+      for (const rd of router.router_devices) {
+        if (!rd.ip || arpIps.has(rd.ip)) continue;
         list.push({
-          ip: rd.ip,
-          mac: rd.mac || "",
-          live: true,
-          source: "router",
-          iface: "",
+          ip: rd.ip, mac: rd.mac || "", iface: "", source: "router", live: rd.online,
           gateway: data.gateway ? rd.ip === data.gateway : undefined,
+          name: ipNames.get(rd.ip) || "",
+          vendor: rd.vendor, icon: rd.icon, freq: rd.freq,
+          rssi: rd.rssi, link_quality: rd.link_quality, wired: rd.wired,
+          guest: rd.guest, rx: rd.rx_bytes, tx: rd.tx_bytes, last_seen: rd.last_seen,
+          state: ipState.get(rd.ip) || (!rd.online ? "off" : isActive(rd) ? "on" : "idle"),
         });
       }
     }
     const k = kw.trim().toLowerCase();
-    return list.filter((d) => {
+    /* 累计流量 <1MB 的设备(离线 0B 等)默认不显示——列表噪音过滤。
+     * 网关行永远保留(无流量数据, 属导航信息); rx/tx 为 null(流量未知)的也保留,
+     * 避免把 ARP 独有/新接入设备误藏。搜索词非空时穿透该过滤(用户主动找设备)。 */
+    const MIN_TRAFFIC_BYTES = 1024 * 1024;
+    let hiddenLowTraffic = 0;
+    const filtered = list.filter((d) => {
       if (onlyLive && d.live === false) return false;
       /* 类型/频段筛选(来自路由器 HostInfo, 独立 AND 条件, 可多选同组内互斥):
        * 本机 ARP 设备无 icon/freq 元数据, 选中筛选时自然被排除(符合语义)。 */
       if (typeFilter && ipType.get(d.ip) !== typeFilter) return false;
       if (freqFilter && ipFreq.get(d.ip) !== freqFilter) return false;
+      if (d.rx != null && d.tx != null && !d.gateway && !k && (d.rx + d.tx) < MIN_TRAFFIC_BYTES) {
+        hiddenLowTraffic += 1;
+        return false;
+      }
       if (!k) return true;
-      const name = (ipNames.get(d.ip) || "").toLowerCase();
+      const name = (d.name || "").toLowerCase();
       return (
         d.ip.toLowerCase().includes(k) ||
         (d.mac || "").toLowerCase().includes(k) ||
@@ -513,7 +584,10 @@ function Dashboard(): React.ReactElement {
         name.includes(k)
       );
     });
-  }, [data, router, kw, onlyLive, typeFilter, freqFilter, ipNames, ipType, ipFreq]);
+    hiddenLowRef.current = hiddenLowTraffic;
+    const w = { on: 0, idle: 1, off: 2 } as const;
+    return filtered.sort((a, b) => (w[a.state] ?? 1) - (w[b.state] ?? 1));
+  }, [data, router, kw, onlyLive, typeFilter, freqFilter, ipNames, ipType, ipFreq, ipState]);
 
   /* KPI:路由器有终端数据时(不管新鲜/stale/冷却)用全网口径(32 在册/8 在线),
    * 否则退回 ARP 本机口径。data 未加载(初值 null)时给 0,避免读 null.count 崩溃。 */
@@ -521,13 +595,43 @@ function Dashboard(): React.ReactElement {
   const deviceTotal = !data ? 0 : hasRtrData ? (router.router_count ?? data.count) : data.count;
   const onlineTotal = !data ? 0 : hasRtrData ? (router.router_online ?? data.live_count) : data.live_count;
 
-  /* 路由器终端流量 Top 5(按累计下载排序,数据已按该序下发)。 */
+  /* 流量排行时间窗: total=路由器累计计数器(接入以来) / 1h=近 1h 增量 / 5h=历史序列首尾差。 */
+  type TopWin = "total" | "1h" | "5h";
+  const [topWin, setTopWin] = React.useState<TopWin>("total");
+
+  /* 路由器终端流量 Top 5(按所选时间窗排序)。
+   * total: rx_bytes(华为 HiLink 累计计数器, 设备重连清零);
+   * 1h:    delta_1h(脚本两点相减的固定 1h 增量, 含下载+上传);
+   * 5h:    router-traffic 下发的 hist5h(300 点序列首尾 rx/tx 差, 覆盖近 5h;
+   *        设备无历史/不足 2 点则该设备不计入)。 */
   const top5 = React.useMemo(() => {
     if (!router || !router.router_devices) return [];
-    const list = [...router.router_devices].sort((a, b) => (b.rx_bytes ?? 0) - (a.rx_bytes ?? 0));
-    const max = Math.max(1, list[0]?.rx_bytes ?? 1);
-    return list.slice(0, 5).map((d) => ({ d, pct: Math.round(((d.rx_bytes ?? 0) / max) * 100) }));
-  }, [router]);
+    const hist5h = (rtrTraffic && rtrTraffic.hist5h) || {};
+    const pick = (d: RouterDevice): { v: number; tx: number } => {
+      if (topWin === "1h") return { v: d.delta_1h ?? 0, tx: 0 }; // 1h 无分方向字段, tx 不显示
+      if (topWin === "5h") {
+        const h = hist5h[d.ip];
+        if (!h) return { v: -1, tx: 0 }; // 无历史 → 不参与 5h 排行
+        return { v: h.rx ?? 0, tx: h.tx ?? 0 };
+      }
+      return { v: d.rx_bytes ?? 0, tx: d.tx_bytes ?? 0 };
+    };
+    const list = router.router_devices
+      .map((d) => ({ d, ...pick(d) }))
+      .filter((x) => x.v >= 0)
+      .sort((a, b) => b.v - a.v);
+    const max = Math.max(1, list[0]?.v ?? 1);
+    return list.slice(0, 5).map(({ d, v, tx }) => ({ d, v, tx, pct: Math.round((v / max) * 100) }));
+  }, [router, rtrTraffic, topWin]);
+
+  /* 近 5h 是否可用(router-traffic 下发 hist5h; 刚部署/数据循环未跑够 ~10min 时无基线)。 */
+  const hasHist = !!(rtrTraffic && rtrTraffic.hist5h && Object.keys(rtrTraffic.hist5h).length > 0);
+  /* 时间窗切换按钮(标题行复用: 正常排行与 5h 占位提示共用)。 */
+  const winBtns = (["total", "1h", "5h"] as TopWin[]).map((w) => (
+    <button key={w} type="button" className={topWin === w ? "sel" : ""} onClick={() => setTopWin(w)}>
+      {w === "total" ? "累计" : w === "1h" ? "近1h" : "近5h"}
+    </button>
+  ));
 
   /* 设备类型分布(路由器 IconType: mobile/laptop/computer/television/tablet/android)。
    * 保留原始 icon 键, 供 chip 点击筛选时与 ipType 匹配。 */
@@ -574,9 +678,11 @@ function Dashboard(): React.ReactElement {
     return { rows, max, peakIdx, peak };
   }, [router]);
 
-  /* 异常流量告警: 在线设备近 1h 增量 ≥ ANOMALY_BYTES(默认 10GB)就提示, 帮发现"谁在猛传"。 */
-  const ANOMALY_BYTES = 10 * 1024 * 1024 * 1024;
+  /* 异常流量告警: 在线设备近 1h 增量 ≥ 阈值就提示, 帮发现"谁在猛传"。
+   * 阈值默认 10GB, 服务端 env LAN_ANOMALY_GB 可配(经 /api/router 下发)。 */
   const anomalies = React.useMemo(() => {
+    const gb = router?.anomaly_gb ?? 10;
+    const ANOMALY_BYTES = gb * 1024 * 1024 * 1024;
     const out: { ip: string; name: string; d: number }[] = [];
     router?.router_devices?.forEach((d) => {
       if (!d.online || d.delta_1h === undefined || d.delta_1h === null) return;
@@ -662,12 +768,28 @@ function Dashboard(): React.ReactElement {
     if (!selIp) return null;
     return router?.router_devices?.find((d) => d.ip === selIp) || null;
   }, [selIp, router]);
-  const [showAll, setShowAll] = React.useState(false);
 
   return (
     <section className="dash">
       {data && !data.missing ? (
         <>
+          <nav className="tabs">
+            <button type="button" className={"tab" + (tab === "overview" ? " sel" : "")} onClick={() => setTab("overview")}>总览</button>
+            <button type="button" className={"tab" + (tab === "devices" ? " sel" : "")} onClick={() => setTab("devices")}>
+              设备{deviceTotal > 0 ? <span className="badge">{deviceTotal}</span> : null}
+            </button>
+            <button type="button" className={"tab" + (tab === "dns" ? " sel" : "")} onClick={() => setTab("dns")}>
+              域名访问{dns && (dns.client_count ?? 0) > 0 ? <span className="badge">{dns.client_count}</span> : null}
+            </button>
+            <span className="tabs-spacer" />
+            <span className="hint">快照于 {fmtTs(data.scanned_at)}</span>
+            <button className="btn" disabled={refreshing} onClick={() => void load()}>{refreshing ? "刷新中…" : "刷新"}</button>
+          </nav>
+
+          {(data.stale || data.note) ? <div className={"banner " + (data.stale ? "warn" : "")}>{data.note}</div> : null}
+
+          {tab === "overview" ? (
+          <>
           <div className="kpis">
             <div className="kpi"><div className="k">设备</div><div className="v">{deviceTotal}</div><div className="u">{hasRtrData ? "台在册(全网)" : "台在册(本机)"}</div></div>
             <div className="kpi ok"><div className="k">在线</div><div className="v">{onlineTotal}</div><div className="u">{hasRtrData ? "live=true(全网)" : "live=true(本机)"}</div></div>
@@ -744,12 +866,16 @@ function Dashboard(): React.ReactElement {
               ) : null}
               {top5.length > 0 ? (
                 <div className="rtrtop">
-                  <div className="rtrtop-title">流量排行（累计下载 Top {top5.length}）<span className="rtrtop-hint">· 点选看该设备流量曲线</span></div>
+                  <div className="rtrtop-title">
+                    流量排行（{topWin === "total" ? "累计下载" : topWin === "1h" ? "近 1h 流量" : "近 5h 下载"} Top {top5.length}）
+                    <span className="rtrtop-win">{winBtns}</span>
+                    <span className="rtrtop-hint">· 点选跳到「设备」Tab 看详情与曲线</span>
+                  </div>
                   {top5.map((item, i) => (
                     <div
                       key={item.d.ip + item.d.mac}
                       className={"rtrtop-row" + (selIp === item.d.ip ? " sel" : " click")}
-                      onClick={() => selectDevice(item.d.ip)}
+                      onClick={() => { selectDevice(item.d.ip); setTab("devices"); }}
                       role="button"
                       tabIndex={0}
                     >
@@ -759,8 +885,12 @@ function Dashboard(): React.ReactElement {
                       {item.d.vendor ? <span className="rtrtop-vendor">{item.d.vendor}</span> : null}
                       {item.d.online ? <span className={"rtrtop-live" + (isActive(item.d) ? "" : " idle")}>{isActive(item.d) ? "活跃" : "挂起"}</span> : null}
                       <div className="rtrtop-bar"><div style={{ width: item.pct + "%" }} /></div>
-                      <span className="rtrtop-net">↓{fmtBytes(item.d.rx_bytes)} · ↑{fmtBytes(item.d.tx_bytes)}</span>
-                      {item.d.delta_1h !== undefined && item.d.delta_1h !== null ? (
+                      <span className="rtrtop-net">
+                        {topWin === "1h"
+                          ? <>↓↑{fmtBytes(item.v)}</>
+                          : <>↓{fmtBytes(item.v)} · ↑{fmtBytes(item.tx)}</>}
+                      </span>
+                      {topWin === "1h" && item.d.delta_1h !== undefined && item.d.delta_1h !== null ? (
                         <span className="rtrtop-rate" title="近 1h 平均速率（增量/3600）">
                           {fmtBytes(Math.round(item.d.delta_1h / 3600))}/s
                         </span>
@@ -768,63 +898,21 @@ function Dashboard(): React.ReactElement {
                     </div>
                   ))}
                 </div>
-              ) : null}
-              {selDevice ? (
-                <DeviceDetail d={selDevice} name={ipNames.get(selDevice.ip) || selDevice.hostname || selDevice.vendor || ""} />
-              ) : null}
-              {selChart ? (
-                <PerDeviceChart device={selChart.device} rows={selChart.rows} max={selChart.max} win={selChart.win} />
-              ) : null}
-              {selIp && selDevice && !selChart ? (
-                <div className="routernote dim">该设备暂无流量历史（数据循环刚跑或该设备离线已久），点「刷新」或等 1 个周期再看曲线；上方详情卡已展示它的全部信息。</div>
+              ) : topWin === "5h" && !hasHist ? (
+                /* 5h 数据未就绪: 排行区保留(不整块消失), 给出降级提示。 */
+                <div className="rtrtop">
+                  <div className="rtrtop-title">
+                    流量排行（近 5h 下载）
+                    <span className="rtrtop-win">{winBtns}</span>
+                  </div>
+                  <div className="routernote">
+                    ⏳ 近 5h 流量历史未就绪：router-traffic 数据循环跑满 ~10 分钟才有基线。
+                    可先看「累计 / 近1h」，或稍后点刷新。
+                  </div>
+                </div>
               ) : null}
               {router.router_devices && router.router_devices.length > 0 ? (
-                <div className="rtrdevs">
-                  {(() => {
-                    /* 默认只显示活跃设备; 挂起中/离线的折叠成一行, 可展开 */
-                    const active = router.router_devices!.filter((d) => isActive(d));
-                    const inactive = router.router_devices!.filter((d) => !isActive(d));
-                    const shownList = showAll ? router.router_devices! : active;
-                    return (
-                    <>
-                    {shownList.map((d) => {
-                      const st = !d.online ? "off" : isActive(d) ? "on" : "idle";
-                      return (
-                    <div
-                      key={d.ip + d.mac}
-                      className={"rtrdev " + (d.online ? "" : "off") + (selIp === d.ip ? " sel" : " click")}
-                      onClick={() => selectDevice(d.ip)}
-                      role="button"
-                      tabIndex={0}
-                    >
-                      <span className="rtrdev-ip mono">{d.ip}</span>
-                      <span className="rtrdev-host">{d.hostname || d.mac}</span>
-                      {d.vendor ? <span className="rtrdev-vendor">{d.vendor}</span> : null}
-                      <Rssi rssi={d.rssi} wired={d.wired} linkQuality={d.link_quality} />
-                      {d.guest ? <span className="rtrdev-tag">访客</span> : null}
-                      <span className="rtrdev-net">↓{fmtBytes(d.rx_bytes)} · ↑{fmtBytes(d.tx_bytes)}</span>
-                      {d.last_seen ? <span className="rtrdev-last">{d.last_seen.slice(5)}</span> : null}
-                      <span className={"rtrdev-state st-" + st}>
-                        {st === "off" ? "离线" : st === "idle" ? "挂起中" : "活跃"}
-                      </span>
-                      <span className={"rtrdev-dot " + st} />
-                    </div>
-                    );
-                    })}
-                    {!showAll && inactive.length > 0 ? (
-                      <button className="rtrdevs-toggle" onClick={() => setShowAll(true)}>
-                        显示挂起中/离线的 {inactive.length} 台
-                      </button>
-                    ) : null}
-                    {showAll && inactive.length > 0 ? (
-                      <button className="rtrdevs-toggle" onClick={() => setShowAll(false)}>
-                        收起挂起中/离线（默认只显示活跃 {active.length} 台）
-                      </button>
-                    ) : null}
-                    </>
-                    );
-                  })()}
-                </div>
+                <div className="rtrdevs-hint">完整终端列表（含信号/类型/流量/频段）见「设备」Tab，点上方排行可跳转查看详情。</div>
               ) : (
                 <div className="routernote">
                   {router.login_stale_note
@@ -836,55 +924,70 @@ function Dashboard(): React.ReactElement {
           ) : router && router.note ? (
             <div className="routernote dim">{router.note}</div>
           ) : null}
+          </>
+          ) : null}
 
-          {dns ? <DnsPanel dns={dns} ipNames={ipNames} hostIp={data.host_ip || ""} /> : null}
+          {tab === "devices" ? (
+            <div className="tabpanel">
+              {selDevice ? <DeviceDetail d={selDevice} name={ipNames.get(selDevice.ip) || selDevice.hostname || selDevice.vendor || ""} row={deviceRows.find((r) => r.ip === selDevice.ip)} /> : null}
+              {selChart ? <PerDeviceChart device={selChart.device} rows={selChart.rows} max={selChart.max} win={selChart.win} /> : null}
+              {selIp && selDevice && !selChart ? (
+                <div className="routernote dim">该设备暂无流量历史（数据循环刚跑或该设备离线已久），点「刷新」或等 1 个周期再看曲线；上方详情卡已展示它的全部信息。</div>
+              ) : null}
+              <div className="toolbar">
+                <input
+                  value={kw}
+                  onChange={(e) => setKw(e.target.value)}
+                  placeholder="搜 IP / 设备名 / MAC / 网卡…"
+                />
+                <label className="chk"><input type="checkbox" checked={onlyLive} onChange={(e) => setOnlyLive(e.target.checked)} />只看在线</label>
+                {hiddenLowRef.current > 0 ? (
+                  <span className="filter-hint" title="累计流量（下载+上传）不足 1MB 的设备已从列表隐藏">
+                    已隐藏 {hiddenLowRef.current} 台流量&lt;1MB
+                  </span>
+                ) : null}
+                {(typeFilter || freqFilter) ? (
+                  <button
+                    type="button"
+                    className="filter-active"
+                    onClick={() => { setTypeFilter(""); setFreqFilter(""); }}
+                    title="清除筛选"
+                  >
+                    {typeFilter ? ("类型:" + (typeDist.find((t) => t.key === typeFilter)?.label || typeFilter)) : ""}
+                    {typeFilter && freqFilter ? " · " : ""}
+                    {freqFilter ? ("频段:" + freqFilter) : ""}
+                    <span className="filter-clear">✕</span>
+                  </button>
+                ) : null}
+                <span className="spacer" />
+                {router?.router_devices && router.router_devices.length > 0 ? (
+                  <button className="btn ghost" onClick={exportCsv} title="导出当前终端列表为 CSV(IP/名称/厂商/流量/信号/最后活跃)">导出 CSV</button>
+                ) : null}
+              </div>
+              <div className="tablewrap">
+                <table className="devs">
+                  <thead><tr><th>状态</th><th>IP</th><th>设备名</th><th>MAC</th><th>流量</th></tr></thead>
+                  <tbody>
+                    {deviceRows.map((d) => <DeviceRow key={d.ip} d={d} selIp={selIp} onSelect={selectDevice} />)}
+                    {deviceRows.length === 0 && <tr><td colSpan={5} className="empty">无匹配设备</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
 
-          {(data.stale || data.note) ? <div className={"banner " + (data.stale ? "warn" : "")}>{data.note}</div> : null}
-          <div className="toolbar">
-            <input
-              value={kw}
-              onChange={(e) => setKw(e.target.value)}
-              placeholder="搜 IP / 设备名 / MAC / 网卡…"
-            />
-            <label className="chk"><input type="checkbox" checked={onlyLive} onChange={(e) => setOnlyLive(e.target.checked)} />只看在线</label>
-            {(typeFilter || freqFilter) ? (
-              <button
-                type="button"
-                className="filter-active"
-                onClick={() => { setTypeFilter(""); setFreqFilter(""); }}
-                title="清除筛选"
-              >
-                {typeFilter ? ("类型:" + (typeDist.find((t) => t.key === typeFilter)?.label || typeFilter)) : ""}
-                {typeFilter && freqFilter ? " · " : ""}
-                {freqFilter ? ("频段:" + freqFilter) : ""}
-                <span className="filter-clear">✕</span>
-              </button>
-            ) : null}
-            <span className="spacer" />
-            <span className="hint">快照于 {fmtTs(data.scanned_at)} · 宿主 <code>make scan</code> 刷新数据源</span>
-            {router?.router_devices && router.router_devices.length > 0 ? (
-              <button className="btn ghost" onClick={exportCsv} title="导出当前终端列表为 CSV(IP/名称/厂商/流量/信号/最后活跃)">导出 CSV</button>
-            ) : null}
-            <button className="btn" onClick={() => void load()}>刷新</button>
-          </div>
-          <div className="tablewrap">
-            <table className="devs">
-              <thead><tr><th>IP</th><th>设备名</th><th>MAC</th><th>网卡</th><th>来源</th><th>状态</th></tr></thead>
-              <tbody>
-                {shown.map((d) => (
-                  <DeviceRow key={d.ip} ip={d.ip} mac={d.mac} iface={d.iface} source={d.source} live={d.live} gateway={d.gateway} name={ipNames.get(d.ip)} state={ipState.get(d.ip)} />
-                ))}
-                {shown.length === 0 && <tr><td colSpan={6} className="empty">无匹配设备</td></tr>}
-              </tbody>
-            </table>
-          </div>
+          {tab === "dns" ? (
+            <div className="tabpanel">
+              {dns ? <DnsPanel dns={dns} ipNames={ipNames} hostIp={data.host_ip || ""} /> : <div className="dnsoff">域名访问数据未加载（AdGuard 未连接或尚未抓取）。</div>}
+            </div>
+          ) : null}
         </>
       ) : data && data.missing ? (
         <div className="empty-box">
           <p>暂无设备快照。</p>
           <p className="dim">{data.note}</p>
           <p>在宿主终端跑 <code>make scan</code>(或 <code>python3 scripts/scan_lan.py</code>),然后点「刷新」。</p>
-          <button className="btn" onClick={() => void load()}>刷新</button>
+          <button className="btn" disabled={refreshing} onClick={() => void load()}>{refreshing ? "刷新中…" : "刷新"}</button>
         </div>
       ) : (
         <div className="loading">{err ? "加载失败:" + err : "loading…"}</div>
@@ -896,6 +999,16 @@ function Dashboard(): React.ReactElement {
 
 function App(): React.ReactElement {
   const [route] = React.useState(parsePath);
+  /* 主题: localStorage 记忆, 未设置时跟随系统 prefers-color-scheme。 */
+  const [theme, setTheme] = React.useState<"light" | "dark">(() => {
+    const saved = localStorage.getItem("lume-theme");
+    if (saved === "light" || saved === "dark") return saved;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
+  React.useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("lume-theme", theme);
+  }, [theme]);
   React.useEffect(() => {
     const onNav = () => { /* 单页,仅重渲;占位供后续扩展路由 */ window.dispatchEvent(new Event("lan:redraw")); };
     window.addEventListener("lan:navigate", onNav);
@@ -915,6 +1028,10 @@ function App(): React.ReactElement {
         <span className="brand">Lume LAN</span>
         <a href="/" className="active">仪表盘</a>
         <a className="home-link" href="https://erishen.cn/" data-external="1">← erishen.cn</a>
+        <button type="button" className="theme-btn" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+          title={theme === "dark" ? "切换到浅色" : "切换到深色"} aria-label="切换深浅色主题">
+          {theme === "dark" ? "☀" : "☾"}
+        </button>
       </nav>
       {view === "" || view === "index" ? <Dashboard /> : <div className="empty-box">未知页 <code>/{view}</code></div>}
       <footer className="foot">

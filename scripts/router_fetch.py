@@ -476,8 +476,8 @@ def _load_last_wan_topo() -> tuple:
 
 # ---- 告警: 新设备进网 / WAN 状态跳变 / 异常流量(状态去重, 首次静默建基线) ----
 ALERT_STATE = os.path.join(ROOT, ".data", "alert_state.json")
-# 近 1h 增量 >= 10GB 判异常(与前端告警同阈值)。
-ANOMALY_BYTES = 10 * 1024 * 1024 * 1024
+# 近 1h 增量 >= LAN_ANOMALY_GB(默认 10)GB 判异常(与前端告警同阈值, 同一 env 控制)。
+ANOMALY_BYTES = int(os.environ.get("LAN_ANOMALY_GB", "10")) * 1024 * 1024 * 1024
 ANOMALY_RESEND_SECS = 1800                 # 同设备异常告警 30min 去重
 
 
@@ -533,7 +533,7 @@ def check_alerts(devices: list, wan: dict, fetched_at: int) -> list:
       - 首次(无状态文件): 静默建基线, 不告警(避免把 32 台全推进群里)
       - 新设备进网: MAC 不在已知集合 且 当前在线
       - WAN 跳变: 状态 Up ↔ 其它(有上次记录时)
-      - 异常流量: 在线且 delta_1h >= 10GB, 同设备 30min 去重
+      - 异常流量: 在线且 delta_1h >= LAN_ANOMALY_GB(默认10)GB, 同设备 30min 去重
       - 关键设备离线: CRITICAL_IPS(.env) 里的设备 在线→离线 跳变推一次, 上线解除
     副作用: 更新 .data/alert_state.json; 配了 WEBHOOK_URL 就经 webhook_notify 推送,
     没配只打印(数据循环跑不报错)。

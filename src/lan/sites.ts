@@ -1,11 +1,12 @@
 /* 本地域名知识库: 常用域名 → 网站名。
  * 离线匹配(家庭 DNS 日志不外发第三方 API, 隐私安全)。
  * 命中规则: 主机名包含 key, 按 key 长度降序匹配(长 key 优先, 避免误匹配)。
- * kind "cdn" = CDN/云基础设施/证书, 展示时只标注类型, 不冒充网站名。
+ * kind "cdn" = CDN/云基础设施/证书; "sdk" = 遥测/推送/统计端点(不是给人访问的网站,
+ * 点击打不开, 前端不给跳转链接); 缺省 = 正常网站(可点击跳转)。
  */
-export type SiteInfo = { name: string; cdn?: boolean };
+export type SiteInfo = { name: string; kind: "site" | "cdn" | "sdk" };
 
-type Site = { key: string; name: string; kind?: "cdn" };
+type Site = { key: string; name: string; kind?: "cdn" | "sdk" };
 
 const SITES: Site[] = [
   // ---- 社交 / 即时通讯 ----
@@ -124,26 +125,31 @@ const SITES: Site[] = [
   { key: "twitter", name: "X(Twitter)" },
   { key: "x.com", name: "X(Twitter)" },
   { key: "linkedin", name: "LinkedIn" },
-  // ---- 厂商遥测 / 推送 / 统计 SDK(设备后台静默流量的大头, 标注归属公司) ----
-  { key: "galileotelemetry", name: "腾讯(遥测)" },
-  { key: "tencent", name: "腾讯(遥测)" },
-  { key: "ctobsnssdk", name: "字节跳动(数据采集)" },
-  { key: "bytedance", name: "字节跳动" },
-  { key: "zijieapi", name: "字节跳动(数据采集)" },
-  { key: "zijie", name: "字节跳动" },
-  { key: "iesdouyin", name: "抖音(埋点)" },
-  { key: "pstatp", name: "字节跳动(CDN)" },
-  { key: "byteimg", name: "字节跳动(CDN)" },
-  { key: "getui", name: "个推(推送SDK)" },
-  { key: "gepush", name: "个推(推送SDK)" },
-  { key: "umeng", name: "友盟(统计SDK)" },
-  { key: "jpush", name: "极光推送" },
-  { key: "bugly", name: "腾讯Bugly" },
-  { key: "sentry", name: "Sentry(错误监控)" },
-  { key: "firebase", name: "Google(服务)" },
+  // ---- 厂商遥测 / 推送 / 统计 SDK(设备后台静默流量的大头, 不是网站, 点击打不开) ----
+  { key: "galileotelemetry", name: "腾讯(遥测)", kind: "sdk" },
+  { key: "rmonitor", name: "腾讯(遥测)", kind: "sdk" },
+  { key: "beacon", name: "埋点", kind: "sdk" },
+  { key: "ctobsnssdk", name: "字节跳动(数据采集)", kind: "sdk" },
+  { key: "zijieapi", name: "字节跳动(数据采集)", kind: "sdk" },
+  { key: "zijie", name: "字节跳动", kind: "sdk" },
+  { key: "iesdouyin", name: "抖音(埋点)", kind: "sdk" },
+  { key: "pstatp", name: "字节跳动(CDN)", kind: "cdn" },
+  { key: "byteimg", name: "字节跳动(CDN)", kind: "cdn" },
+  { key: "getui", name: "个推(推送SDK)", kind: "sdk" },
+  { key: "gepush", name: "个推(推送SDK)", kind: "sdk" },
+  { key: "umeng", name: "友盟(统计SDK)", kind: "sdk" },
+  { key: "jpush", name: "极光推送", kind: "sdk" },
+  { key: "bugly", name: "腾讯Bugly", kind: "sdk" },
+  { key: "sentry", name: "Sentry(错误监控)", kind: "sdk" },
+  { key: "firebase", name: "Google(服务)", kind: "sdk" },
+  { key: "windowsupdate", name: "微软(系统更新)", kind: "sdk" },
+  { key: "push.apple", name: "Apple(推送)", kind: "sdk" },
+  { key: "push-apple", name: "Apple(推送)", kind: "sdk" },
+  { key: "akadns", name: "Apple(推送)", kind: "sdk" },
+  { key: "appsflayer", name: "AppsFlyer", kind: "sdk" },
+  { key: "adjust.com", name: "Adjust(归因)", kind: "sdk" },
   { key: "gstatic", name: "Google(静态资源)", kind: "cdn" },
   { key: "gvt1", name: "Google(静态资源)", kind: "cdn" },
-  { key: "windowsupdate", name: "微软(系统更新)" },
   { key: "huawei", name: "华为" },
   { key: "xiaomi", name: "小米" },
   { key: "miui", name: "小米(系统服务)" },
@@ -170,12 +176,14 @@ const SITES: Site[] = [
   { key: "amazonaws", name: "AWS", kind: "cdn" },
   { key: "digicert", name: "证书服务", kind: "cdn" },
   { key: "letsencrypt", name: "证书服务", kind: "cdn" },
-].sort((a, b) => b.key.length - a.key.length);
+].sort((a, b) =>
+  b.key.length - a.key.length ||
+  ((b.kind === "sdk" ? 1 : 0) - (a.kind === "sdk" ? 1 : 0)));
 
 /** 主机名 → 网站信息(未命中返回 null, 展示层保持显示域名本身)。 */
 export function siteName(host: string): SiteInfo | null {
   for (const s of SITES) {
-    if (host.includes(s.key)) return { name: s.name, cdn: s.kind === "cdn" };
+    if (host.includes(s.key)) return { name: s.name, kind: s.kind ?? "site" };
   }
   return null;
 }

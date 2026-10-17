@@ -22,7 +22,7 @@ Lume 服务端把它们做成 HTTP API，React 界面展示。
 | **lume-nsgm** | AI 友好的确定性 CRUD 生成层（schema → 全栈 CRUD 工程） | https://github.com/erishen/lume-nsgm |
 | **lume-lan（本仓库）** | 局域网设备 + DNS + 流量看板 | 待公开 |
 
-**lume 与 lume-core 的区别**：**lume-core 是语言**——同一种 `.lume` 源码在解释器 / LLVM IR 文本 / libLLVM C API 三个后端上类型检查与执行结果一致，不依赖任何运行时；**lume 是框架**——在 lume-core 之上接入 agent-httpd（HTTP / SSE 聊天 / MCP / 会话）与原生 SQLite，一个 ~1.7 MB 可执行文件就能 serve 静态站 + JSON API + 聊天 + agent。生态里的应用（crm / talentlens / nsgm / lan）都构建在这层之上。
+**lume 与 lume-core 的区别**：**lume-core 是语言 + 核心运行时**——同一种 `.lume` 源码在解释器 / LLVM IR 文本 / libLLVM C API 三个后端上类型检查与执行结果一致，不依赖任何运行时；≥0.7.0 起内建 `server` / `route` / `run` / `sql_query` / `sql_write` / `docroot` 等运行时能力，单二进制即可跑起全栈应用。**lume 是完整框架**——在 lume-core 之上接入 agent-httpd（SSE 聊天 / MCP / 会话）与原生 SQLite，一个 ~1.7 MB 可执行文件就能 serve 静态站 + JSON API + 聊天 + agent。生态里的应用（crm / talentlens / nsgm / lan）都**构建在 lume-core 的语言与运行时之上**（用 `server` / `route` / `run` 等内建能力），需要 agent / SSE 聊天等增强时再叠加 lume 框架。
 
 ## 能展示什么
 

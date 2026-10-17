@@ -1,238 +1,286 @@
-# Lume LAN — 局域网设备看板
+# Lume LAN — Local Network Device Dashboard
 
-Lume（C 语言实现的 DSL 解释器）+ React 搭的一个局域网设备看板：宿主脚本扫
-`arp`/ping 出当前内网设备快照、抓路由器终端/流量、读 AdGuard DNS 记录，
-Lume 服务端把它们做成 HTTP API，React 界面展示。
+[English](README.md) | [简体中文](README.zh.md)
 
-照 `lume-crm` 的范式（`.lume` 服务端 + esbuild 打 React 进 `www/` + Makefile 串联）搭的。
+A home-LAN device dashboard built with **Lume** (a C11 DSL interpreter) + React: host
+scripts sweep `arp`/ping for the current device snapshot, fetch router
+terminal/traffic data, and read AdGuard DNS query logs; the Lume server exposes them
+as HTTP APIs, rendered by the React frontend.
 
-## 生态与血缘
+Built following the `lume-crm` pattern (`.lume` server + esbuild bundling React into
+`www/` + Makefile orchestration).
 
-> ⚠️ **`lume` 是自研的 C11 Web 应用引擎**，与 Deno 生态的 [lumeland/lume](https://github.com/lumeland/lume)（静态站生成器）**无关**，
-> 也不是 [lume/lume](https://github.com/lume/lume)（CSS3D/WebGL 工具库）。撞名纯属巧合。
+## Ecosystem & Provenance
 
-本仓库是 **lume 生态**的一员：
+> ⚠️ **`lume` is a self-built C11 web engine** and is **unrelated** to
+> [lumeland/lume](https://github.com/lumeland/lume) (the Deno static site generator),
+> nor is it [lume/lume](https://github.com/lume/lume) (a CSS3D/WebGL toolkit).
+> The name collision is coincidental.
 
-| 项目 | 是什么 | 链接 |
+This repository is a member of the **lume ecosystem**:
+
+| Project | What it is | Link |
 |---|---|---|
-| **lume** | 完整框架：单二进制 C11 后端（`.lume` DSL + HTTP/SSE/SSR + SQLite + agent 工具） | https://github.com/erishen/lume |
-| **lume-core** | 语言核心：词法/语法/类型检查 + 解释器 / LLVM 发射（host 无关） | https://github.com/erishen/lume-core |
-| **lume-crm** | 用 lume 完整构建 CRM 后台的蓝本 | https://github.com/erishen/lume-crm |
-| **lume-talentlens** | 读 GitHub 足迹出「人才信号」的招聘仪表盘 | https://github.com/erishen/lume-talentlens |
-| **lume-nsgm** | AI 友好的确定性 CRUD 生成层（schema → 全栈 CRUD 工程） | https://github.com/erishen/lume-nsgm |
-| **lume-lan（本仓库）** | 局域网设备 + DNS + 流量看板 | 待公开 |
+| **lume** | Full framework: single-binary C11 backend (`.lume` DSL + HTTP/SSE/SSR + SQLite + agent tools) | https://github.com/erishen/lume |
+| **lume-core** | Language core: lexer/parser/type checker + interpreter / LLVM emitters (host-independent) | https://github.com/erishen/lume-core |
+| **lume-crm** | A blueprint CRM admin built entirely with lume | https://github.com/erishen/lume-crm |
+| **lume-talentlens** | Recruiting dashboard surfacing "talent signals" from GitHub footprints | https://github.com/erishen/lume-talentlens |
+| **lume-nsgm** | AI-friendly deterministic CRUD generation layer (schema → full-stack CRUD project) | https://github.com/erishen/lume-nsgm |
+| **lume-lan (this repo)** | LAN device + DNS + traffic dashboard | coming soon |
 
-**lume 与 lume-core 的区别**：**lume-core 是语言 + 核心运行时**——同一种 `.lume` 源码在解释器 / LLVM IR 文本 / libLLVM C API 三个后端上类型检查与执行结果一致，不依赖任何运行时；≥0.7.0 起内建 `server` / `route` / `run` / `sql_query` / `sql_write` / `docroot` 等运行时能力，单二进制即可跑起全栈应用。**lume 是完整框架**——在 lume-core 之上接入 agent-httpd（SSE 聊天 / MCP / 会话）与原生 SQLite，一个 ~1.7 MB 可执行文件就能 serve 静态站 + JSON API + 聊天 + agent。生态里的应用（crm / talentlens / nsgm / lan）都**构建在 lume-core 的语言与运行时之上**（用 `server` / `route` / `run` 等内建能力），需要 agent / SSE 聊天等增强时再叠加 lume 框架。
+**lume vs lume-core**: **lume-core is the language + core runtime** — the same `.lume`
+source type-checks and runs identically on all three backends (interpreter / LLVM IR
+text / libLLVM C API), with no runtime dependency; since ≥0.7.0 it also ships built-in
+`server` / `route` / `run` / `sql_query` / `sql_write` / `docroot` capabilities, so a
+single binary can run a full-stack app. **lume is the full framework** — on top of
+lume-core it adds agent-httpd (SSE chat / MCP / sessions) and native SQLite, letting a
+~1.7 MB executable serve static sites + JSON APIs + chat + agents. Ecosystem apps
+(crm / talentlens / nsgm / lan) all **build on lume-core's language and runtime**
+(using built-in `server` / `route` / `run`), layering in the lume framework only when
+agent / SSE chat enhancements are needed.
 
-## 能展示什么
+## What it shows
 
-看板按 Tab 组织：**总览 / 设备 / 域名访问**（Tab 栏的设备/域名数字是实时计数）。
+The dashboard is organized into tabs: **Overview / Devices / Domain Access** (the
+device/domain counts in the tab bar update live).
 
-| 区 | 内容 | 数据源 |
+| Section | Content | Data source |
 |---|---|---|
-| KPI | 设备总数 / 在线数（全网口径）/ 网关 / 快照 | arp + 路由器 |
-| 路由器区 | 型号 / SN / OUI / 终端数 | 免密 `/api/system/deviceinfo` |
-| 流量趋势曲线 | 家庭总流量随时间变化（每 60s 采样，近 135 分钟），**峰值时刻 + 主因设备**（谁在吃带宽） | `router_fetch.py` 累计流量历史差分 |
-| 流量排行 Top5 | 累计下载 Top5，**时间窗可切换（近 1h / 近 5h / 累计）** + 活跃/挂起标签，点条目跳「设备」Tab | `HostInfo` + 流量历史 |
-| 设备类型分布 | 手机 / 笔记本 / 电脑 / 电视 / 平板 / Android（**chip 可点击筛选**） | 路由器 `IconType` |
-| Wi-Fi 频段分布 | 5GHz / 2.4GHz（**chip 可点击筛选**） | 路由器 `Frequency` |
-| WAN 状态卡 | 连接态 / 接入方式 / IPv4 / 网关 / DNS / IPv6 / NAT 类型 / 带宽峰值 | 登录态 `ntwk/wan` |
-| 域名访问 | 谁访问了什么域名（Top 列表 + 客户端分布），含 AdGuard 配置指引 | AdGuard Home `/control/querylog` |
-| 完整终端列表 | 在线/挂起中/离线三态 + 活跃/挂起标签 + 设备备注（终端管理页改的名自动同步） | `HostInfo` |
-| 设备表 | 本机 ARP + 路由器在线合并，设备名按 IP 关联，搜索框可搜 IP/设备名/MAC/网卡 | `arp -a` + `HostInfo` |
-| 终端信号强度 | 每终端 3 段信号柱（好/中/差，按 RSSI），有线/未知显示 — | 登录态 `device/topology` |
-| 异常流量告警 | 在线设备近 1h 增量 ≥`LAN_ANOMALY_GB`（默认 10GB）时顶部红条点名 | 流量历史 |
-| 导出 CSV | 工具栏一键导出全部终端（名称/厂商/流量/信号/最后活跃）存档 | 前端 |
+| KPI | total devices / online (whole-network scope) / gateway / snapshot time | arp + router |
+| Router card | model / SN / OUI / client count | password-free `/api/system/deviceinfo` |
+| Traffic trend | household total traffic over time (sampled every 60s, last ~135 min), **peak moments + the device responsible** | `router_fetch.py` cumulative traffic diff |
+| Traffic Top5 | cumulative download Top5, **switchable time window (1h / 5h / all-time)** + active/idle tags, click to jump to the Devices tab | `HostInfo` + traffic history |
+| Device type breakdown | phone / laptop / computer / TV / tablet / Android (**clickable filter chips**) | router `IconType` |
+| Wi-Fi band breakdown | 5GHz / 2.4GHz (**clickable filter chips**) | router `Frequency` |
+| WAN status card | link state / access type / IPv4 / gateway / DNS / IPv6 / NAT type / bandwidth peak | authenticated `ntwk/wan` |
+| Domain access | who accessed which domains (top list + per-client breakdown), with an AdGuard setup guide | AdGuard Home `/control/querylog` |
+| Full client list | online / idle / offline states + active/idle tags + device notes (names edited in the router admin sync automatically) | `HostInfo` |
+| Device table | local ARP merged with router-online devices, names resolved by IP, searchable by IP/name/MAC/NIC | `arp -a` + `HostInfo` |
+| Signal strength | per-client 3-bar signal (good / medium / bad by RSSI); wired/unknown show — | authenticated `device/topology` |
+| Anomaly alert | red banner calling out online devices whose last-1h delta ≥ `LAN_ANOMALY_GB` (default 10GB) | traffic history |
+| Export CSV | one-click export of all clients (name / vendor / traffic / signal / last active) from the toolbar | frontend |
 
-「设备类型」「Wi-Fi 频段」两行的 chip 是**筛选器**：点一下只看该类/该频段的设备，再点取消；
-工具栏会显示当前激活的筛选（可一键清除）。
+The chips in the "Device type" and "Wi-Fi band" rows are **filters**: click once to
+show only that type/band, click again to clear; the toolbar shows the active filters
+(with one-click reset).
 
-### 本地设备命名（`aliases.json`）
+### Local device naming (`aliases.json`)
 
-设备显示名的优先级：**本地别名 > 路由器备注(终端管理页改的, `ActualName`) > 设备自报名(HostName) > 厂商**。
-前面两级是路由器登录态拉回来的；**本地别名不依赖登录**，适合「路由器里没改好名 / 登录态拉不到时也想自定义」的场景。
-
-```
-.data/aliases.json      # 本地命名层({ip: 名字}), 已 gitignore, 不入库
-{ "192.168.1.100": "儿童故事机" }   # 示例: 换成你家真实设备 IP/名字
-```
-
-直接编辑这个文件 + 点界面「刷新」即可改名，不用等路由器同步。
-
-## 架构
+Display-name precedence: **local alias > router note (edited in the client admin,
+`ActualName`) > device self-reported name (`HostName`) > vendor**. The first two levels
+come from the authenticated router session; **the local alias needs no login**, which
+suits cases where the router name was never fixed or the authenticated session can't
+be reached.
 
 ```
-┌─ 宿主（Mac）────────────────────────────────────────────┐
-│  launchd 60s 数据循环（com.<user>.lume-lan-refresh）     │
-│   scripts/scan_lan.py        arp -a → .data/devices.json │
-│   scripts/router_fetch.py    路由器登录态 → .data/router.json│
-│   scripts/adguard_fetch.py   DNS 记录 → .data/dns*.json   │
-│  （arp 扫描依赖宿主网卡，必须宿主跑；容器不跑）           │
-└───────────────────┬──────────────────────────────────────┘
-                    │ .data/ 快照挂载进容器（:ro 由容器读）
-┌─ Docker 容器（lume-lan，端口 10091）─────────────────────┐
-│  Lume server（lan.lume，绑 0.0.0.0:8091，docroot www）   │
-│   /api/devices   /api/router   /api/dns …（读 .data 快照）│
-│  Basic Auth：HTPASSWD_FILE → /auth/htpasswd（只读挂载）  │
-└───────────────────┬──────────────────────────────────────┘
-                    │ http://localhost:10091/（需登录）
-┌─ 前端（src/lan/app.tsx → esbuild → www/app.js）──────────┐
-│  总览/设备/域名访问 Tab + 时间窗 + 筛选 + 导出 + 告警      │
-└──────────────────────────────────────────────────────────┘
+.data/aliases.json      # local naming layer ({ip: name}), gitignored, not committed
+{ "192.168.1.100": "kids story player" }   # example: use your own device IP/name
 ```
 
-服务端是**容器内静态 Lume 二进制**（产品版全静态，无运行时依赖）；前端是**仓库里已 build 的
-`www/`**，容器内不跑 node/esbuild，只做「serve + 读快照 + 认证」。
+Edit this file and click "Refresh" in the UI — no need to wait for the router sync.
 
-## 快速上手（日常）
+## Architecture
+
+```
+┌─ Host (macOS) ───────────────────────────────────────────┐
+│  launchd 60s refresh loop (com.<user>.lume-lan-refresh)   │
+│   scripts/scan_lan.py        arp -a → .data/devices.json  │
+│   scripts/router_fetch.py    router session → .data/router.json │
+│   scripts/adguard_fetch.py   DNS queries → .data/dns*.json │
+│  (arp scanning needs the host NIC — host only, not container) │
+└───────────────────┬───────────────────────────────────────┘
+                    │ .data/ snapshots mounted into the container (ro)
+┌─ Docker container (lume-lan, port 10091) ─────────────────┐
+│  Lume server (lan.lume, binds 0.0.0.0:8091, docroot www)  │
+│   /api/devices  /api/router  /api/dns … (reads .data)     │
+│  Basic Auth: HTPASSWD_FILE → /auth/htpasswd (ro mount)    │
+└───────────────────┬───────────────────────────────────────┘
+                    │ http://localhost:10091/ (login required)
+┌─ Frontend (src/lan/app.tsx → esbuild → www/app.js) ───────┐
+│  Overview / Devices / Domain tabs + time window + filters + export + alerts │
+└───────────────────────────────────────────────────────────┘
+```
+
+The server is the **static Lume binary inside the container** (fully static product
+build, no runtime deps); the frontend is the **pre-built `www/` in the repo** — the
+container runs no node/esbuild, it only serves + reads snapshots + authenticates.
+
+## Quick start (daily)
 
 ```bash
-# 1. 确保数据在更新（launchd 已在跑，看 .runtime/refresh.log 有没有新轮次）
+# 1. Make sure data is refreshing (launchd running; check .runtime/refresh.log for new rounds)
 tail -3 .runtime/refresh.log
 
-# 2. 起看板（首次需先 build 镜像）
+# 2. Start the dashboard (build the image first time only)
 make docker-up        # = docker compose up -d
 
-# 3. 打开
-#    http://localhost:10091/   （Basic Auth：admin / 见 make auth-pass 设置的密码）
+# 3. Open
+#    http://localhost:10091/   (Basic Auth: admin / the password you set via make auth-pass)
 ```
 
-数据采集由 **launchd 开机自启**（见下），不需要手动起循环；`make scan` / `make router-fetch`
-可随时手动补一轮数据。
+Data collection is handled by **launchd at login** (see below); no need to start the
+loop manually. `make scan` / `make router-fetch` can run an extra round any time.
 
-## 数据采集与自愈（launchd）
+## Data collection & self-healing (launchd)
 
-- 采集循环：`~/.local/bin/... .runtime/refresh-once.sh` 每 60s 跑一轮
-  （scan_lan → router_fetch → adguard_fetch），由 launchd 托管：
+- Refresh loop: `.runtime/refresh-once.sh` runs every 60s
+  (scan_lan → router_fetch → adguard_fetch), managed by launchd:
   `~/Library/LaunchAgents/com.<user>.lume-lan-refresh.plist`
-  （`StartInterval=60` + `RunAtLoad`，开机即起，日志写 `.runtime/refresh.log`）。
-- 注册（一次性）：`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.<user>.lume-lan-refresh.plist`
-- 手动跑一轮：`bash .runtime/refresh-once.sh`
-- 开发时替代：`make dev` 也会起 60s 后台循环（`make stop` 清理），两者互斥、不要同时开。
+  (`StartInterval=60` + `RunAtLoad`, starts at login, logs to `.runtime/refresh.log`).
+- Register (one-time):
+  `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.<user>.lume-lan-refresh.plist`
+- Run one round manually: `bash .runtime/refresh-once.sh`
+- Dev alternative: `make dev` also starts a 60s background loop (`make stop` cleans it
+  up); the two are mutually exclusive — don't run both.
 
-## 容器运行（Docker）
+## Running in Docker
 
-看板整个跑进容器：**产品版 `lume` 的全静态 Linux 二进制**（`erishen/lume` release 的
-`lume-linux-<x64|arm64>-static`，无 glibc/libsqlite 运行时依赖，免装 libLLVM）+ 仓库里已 build
-好的前端 `www/`。容器只做「serve + 读快照 + 认证」。
+The whole dashboard runs in a container: the **fully static Linux binary of the
+product `lume`** (the `lume-linux-<x64|arm64>-static` asset from the `erishen/lume`
+releases — no glibc/libsqlite runtime deps, no libLLVM install) + the **pre-built
+frontend `www/`** in the repo. The container only serves + reads snapshots +
+authenticates.
 
-**分工**（关键）：
-- **arp 扫描**（`scan_lan.py`）依赖宿主网卡，**只能在宿主跑**（launchd 循环负责）。
-- **路由器抓取**（`router_fetch.py`，纯 stdlib）可容器内跑，也可宿主跑。compose 里 `REFRESH=0`
-  表示容器只 serve、路由器数据靠宿主 launchd 写进 `.data/`；想容器内自刷新路由器，
-  设 `REFRESH=1` + 打 `ROUTER_HOST`（arp 快照仍靠宿主）。
+**Division of labor** (key):
+- **arp scanning** (`scan_lan.py`) needs the host NIC, so it **runs on the host only**
+  (the launchd loop handles it).
+- **Router fetching** (`router_fetch.py`, pure stdlib) can run in the container or on
+  the host. `REFRESH=0` in compose means the container only serves and router data is
+  written into `.data/` by the host launchd loop; for in-container router refresh set
+  `REFRESH=1` + `ROUTER_HOST` (arp snapshots still come from the host).
 
 ```bash
-make docker-build                 # 打镜像(宿主预下载 Lume 二进制到 vendor/)
-make docker-up                    # 后台起 → http://localhost:10091/ (downt: make docker-down)
-make docker-redeploy              # 一键: 刷数据 + 重 build 前端 + 打镜像 + 重启容器
-make docker-run DOCKER_PORT=11091 # 前台起 + 换端口(默认 10091, >10000 避开本地 dev 的 8091)
+make docker-build                 # build image (host pre-downloads the Lume binary to vendor/)
+make docker-up                    # start in background → http://localhost:10091/ (down: make docker-down)
+make docker-redeploy              # one-shot: refresh data + rebuild frontend + build image + restart container
+make docker-run DOCKER_PORT=11091 # foreground + custom port (default 10091, >10000 to avoid local dev 8091)
 ```
 
-或用 `docker-compose.yml` 直接操作（`ROUTER_PASS` 走 env 注入，不落盘）：
+Or use `docker-compose.yml` directly (`ROUTER_PASS` injected via env, never persisted):
 
 ```bash
-export ROUTER_PASS='...'          # 供 compose 读, 不进镜像
+export ROUTER_PASS='...'          # read by compose, not baked into the image
 docker compose up -d
 ```
 
-- 多架构：`make docker-build-multiarch`（vendor/ 需同时含两种 arch）。
-- 静态版全静态链接，仍基于 `python:3.12-slim`（容器内可选刷新循环要 python3），非 `scratch`。
-- 网络：Mac 的 Docker Desktop 默认 NAT 通常能直达 `192.168.1.1`（示例网段，以你家为准）；连不通时改用 Linux host
-  网络（compose 注释里有 `network_mode: host` 说明）。
+- Multi-arch: `make docker-build-multiarch` (vendor/ must contain both arches).
+- The static build is fully static but still bases on `python:3.12-slim` (the optional
+  in-container refresh loop needs python3), not `scratch`.
+- Networking: Mac's Docker Desktop default NAT usually reaches `192.168.1.1` (example
+  subnet — use yours); if it can't, switch to Linux host networking (see the
+  `network_mode: host` note in the compose comments).
 
-## 看板认证（Basic Auth）
+## Dashboard authentication (Basic Auth)
 
-局域网内看板默认**开启 Basic Auth**（毕竟暴露了家里 IP/MAC/流量）：
-
-```bash
-make auth-pass        # 交互式设置 admin 密码 → 写 .runtime/htpasswd(bcrypt cost 12)
-make docker-redeploy  # 重部署后生效(htpasswd 只读挂载进容器)
-```
-
-- 凭据文件 `.runtime/htpasswd`（600 权限，gitignore），compose 以 `:ro` 挂载到 `/auth/htpasswd`，
-  容器内 Lume 通过 `HTPASSWD_FILE` 开启认证——**密码不进镜像、不进 git**。
-- 改密码：重跑 `make auth-pass` + `make docker-redeploy`。
-
-## AdGuard Home（域名访问数据源）
-
-「域名访问」Tab 的数据来自 **AdGuard Home**，它已迁出容器、以 **Mac 宿主 launchd 服务**运行
-（`com.<user>.adguardhome`，见 `~/Library/LaunchAgents/` + `~/Applications/AdGuardHome/`）。
-原因：容器发布端口会把所有入站 DNS NAT 成同一个网关 IP，AdGuard 看不到真实设备；
-宿主直绑 53 保留真实客户端 IP。
+The dashboard enables **Basic Auth by default** (it does expose your home
+IP/MAC/traffic):
 
 ```bash
-make adguard-up       # 启动宿主 AdGuard（launchd）
-make adguard-down     # 停止
-make adguard-log      # 看 AdGuard 日志
-# 控制台: http://127.0.0.1:10095 (ADGUARD_PORT)
+make auth-pass        # interactive: set the admin password → writes .runtime/htpasswd (bcrypt cost 12)
+make docker-redeploy  # redeploy to apply (htpasswd mounted ro into the container)
 ```
 
-家里设备 DNS：「首选」指 `<Mac 本机 IP>:53`（AdGuard）、「备用」填 `223.5.5.5`。
+- The credential file `.runtime/htpasswd` (0600, gitignored) is mounted `:ro` to
+  `/auth/htpasswd`; the in-container Lume enables auth via `HTPASSWD_FILE` —
+  **the password never enters the image or git**.
+- Change password: re-run `make auth-pass` + `make docker-redeploy`.
 
-## 路由器层（识别「设备使用情况」）
+## AdGuard Home (domain-access data source)
 
-设备表默认只有 IP/MAC/网卡（本地 arp，认不出「是什么设备 / 谁在用」）。加一层
-**路由器后台**（家用路由器，HiLink/CAT 协议，`http://<网关IP>/`，本仓库以 192.168.1.1 示例）：
-
-- **免密（始终可用）**：`/api/system/deviceinfo` → 型号 / 序列号 / 厂商，界面「路由器」区直接显示。
-- **登录态（需密码）**：终端列表 + 每设备流量 + 在线状态 + 最后活跃时间。
-  `router_fetch.py` 自动完成 CAT 登录（SHA256 简单路径，独立于网页 SCRAM 的限流计数），
-  然后读 `/api/system/HostInfo` 拉全部 DHCP 记录。
-  用法：`cp .env.example .env`，填 `ROUTER_PASS`，再 `make router-fetch` 即可。
-  取不到就优雅降级——不影响 arp 快照，界面只多一行提示。
-
-## 依赖
-
-- `lume` release：`~/.local/bin/lume`（安装 `curl -sSfL …/install.sh | sh`；
-  或用 `../lume-core/bin/lume-core`）。
-- `esbuild`：PATH 或 `../lume/frontend/node_modules/.bin/esbuild`（React 走
-  本仓 `node_modules -> ../lume/frontend/node_modules` 软链，同 `lume-crm`）。
-- 宿主扫描：`/usr/bin/python3` + 系统 `arp`（无第三方依赖）。
-
-## 开发模式（改前端）
-
-日常部署走容器；**改代码时**用 `make dev`（宿主直跑，端口 8091）：
+The "Domain Access" tab reads from **AdGuard Home**, which has been moved out of the
+container and runs as a **macOS host launchd service**
+(`com.<user>.adguardhome`; see `~/Library/LaunchAgents/` + `~/Applications/AdGuardHome/`).
+Why: publishing the container port NATs all inbound DNS to a single gateway IP, so
+AdGuard can't see real devices; binding 53 on the host preserves real client IPs.
 
 ```bash
-make dev              # stop + check + scan + router-fetch + esbuild watch + Lume 前台
-                      # → http://127.0.0.1:8091（无 Basic Auth，仅本机）
+make adguard-up       # start host AdGuard (launchd)
+make adguard-down     # stop
+make adguard-log      # follow AdGuard logs
+# Console: http://127.0.0.1:10095 (ADGUARD_PORT)
 ```
 
-- `make ui`            一次性构建前端（esbuild → www/app.js，非 watch）
-- `make check`         Lume --check lan.lume（DSL 语法）
-- `make stop`          停 8091 旧服务 + 残留 esbuild watch + 后台刷新循环
-- 前端改完 → `make ui` → `make docker-redeploy` 上到容器。
+Point your home devices' DNS: primary = `<Mac's LAN IP>:53` (AdGuard), secondary =
+`223.5.5.5`.
 
-## 配置（.env）
+## Router layer (identifying device usage)
 
-`cp .env.example .env` 后按需填（`.env` gitignore，不进仓）：
+The device table alone only has IP/MAC/NIC (local arp — it can't tell "what device /
+who's using it"). Add a **router admin** layer (consumer router, HiLink/CAT protocol,
+`http://<gateway-ip>/`, this repo uses 192.168.1.1 as an example):
 
-| 变量 | 用途 |
+- **Password-free (always available)**: `/api/system/deviceinfo` → model / serial /
+  vendor, shown directly in the "Router" card.
+- **Authenticated (needs password)**: client list + per-device traffic + online state +
+  last-active time. `router_fetch.py` automates the CAT login (a SHA256 simple path,
+  separate from the web SCRAM rate-limit counter), then reads `/api/system/HostInfo`
+  for all DHCP records.
+  Usage: `cp .env.example .env`, fill in `ROUTER_PASS`, then `make router-fetch`.
+  If it can't be reached it degrades gracefully — the arp snapshot is unaffected, the
+  UI just shows one extra hint line.
+
+## Dependencies
+
+- `lume` release: `~/.local/bin/lume` (install `curl -sSfL …/install.sh | sh`;
+  or use `../lume-core/bin/lume-core`).
+- `esbuild`: on PATH or `../lume/frontend/node_modules/.bin/esbuild` (React via this
+  repo's `node_modules -> ../lume/frontend/node_modules` symlink, same as `lume-crm`).
+- Host scanning: `/usr/bin/python3` + system `arp` (no third-party deps).
+
+## Dev mode (frontend changes)
+
+Daily deployment runs in the container; **when changing code** use `make dev` (runs on
+the host, port 8091):
+
+```bash
+make dev              # stop + check + scan + router-fetch + esbuild watch + Lume foreground
+                      # → http://127.0.0.1:8091 (no Basic Auth, localhost only)
+```
+
+- `make ui`            one-shot frontend build (esbuild → www/app.js, not watch)
+- `make check`         Lume --check lan.lume (DSL syntax)
+- `make stop`          stop the 8091 service + leftover esbuild watch + background refresh loop
+- After frontend changes → `make ui` → `make docker-redeploy` to ship into the container.
+
+## Configuration (.env)
+
+`cp .env.example .env` then fill in what you need (`.env` is gitignored):
+
+| Variable | Purpose |
 |---|---|
-| `ROUTER_HOST` / `ROUTER_USER` / `ROUTER_PASS` | 路由器后台地址与登录凭据 |
-| `LAN_SWEEP=1` | arp 之外加 ping sweep（捞出在线但 arp 表没的设备，较慢） |
-| `LAN_ANOMALY_GB=10` | 异常流量告警阈值（近 1h 增量 ≥ 该值点名） |
-| `WEBHOOK_URL` / `WEBHOOK_SECRET` | 告警推送 webhook（不配则只打印日志） |
-| `CRITICAL_IPS` | 关键设备 IP 列表（告警优先点名） |
-| `ADGUARD_HOST` / `ADGUARD_PORT` | AdGuard 地址/端口（默认 127.0.0.1:10095） |
+| `ROUTER_HOST` / `ROUTER_USER` / `ROUTER_PASS` | router admin address and credentials |
+| `LAN_SWEEP=1` | add a ping sweep on top of arp (catches online-but-not-in-arp devices; slower) |
+| `LAN_ANOMALY_GB=10` | anomaly traffic alert threshold (last-1h delta ≥ this value gets called out) |
+| `WEBHOOK_URL` / `WEBHOOK_SECRET` | alert push webhook (unset → log only) |
+| `CRITICAL_IPS` | critical device IP list (alerted first) |
+| `ADGUARD_HOST` / `ADGUARD_PORT` | AdGuard address/port (default 127.0.0.1:10095) |
 
-## 安全
+## Security
 
-- 看板默认 `HTPASSWD_FILE` 开 **Basic Auth**（`.runtime/htpasswd` 只读挂载，密码不进镜像/git）。
-- 快照（`.data/`）是内网 IP/MAC，属隐私数据，已 gitignore，勿提交。
-- 路由器凭据 `ROUTER_PASS` 放 `.env`（gitignore，不进仓）。容器若只 bind 127.0.0.1
-  （`LUME_BIND`），仅本机可访问；开放到局域网/公网前务必先开 Basic Auth。
+- The dashboard enables **Basic Auth** by default via `HTPASSWD_FILE`
+  (`.runtime/htpasswd` mounted ro; password never in image/git).
+- Snapshots (`.data/`) contain LAN IPs/MACs — privacy-sensitive; gitignored, never
+  commit them.
+- Router credentials `ROUTER_PASS` live in `.env` (gitignored). If the container binds
+  only 127.0.0.1 (`LUME_BIND`), only localhost can reach it; before exposing to the
+  LAN/internet, enable Basic Auth first.
 
-## 限制
+## Limitations
 
-- 数据是「最近一轮 launchd 循环」的准实时快照（默认每 60s）；点「刷新」重读最新落盘快照，
-  慢接口（router-traffic 历史）异步到齐，「刷新中…」至少停留 1.2s 给出明确反馈。
-- 流量趋势 / 平均速率 / 活跃-挂起判定都依赖**累积的历史**（`.data/router_traffic_hist*.json`），
-  刚部署或历史被清后要等数据循环跑满约 10 分钟才有基线，期间增量按「未知」处理、不误判。
-- 登录限流（`Too_Many_user`）后，`router_fetch.py` 有 5 分钟冷却：冷却/沿用旧数据时
-  **不往流量历史写点**（避免趋势图出现假的"流量=0"平线），界面用「沿用上次的终端数据」提示。
-- `route get default` 在受限环境（如某些沙箱）会被 OS 拦，脚本兜底从
-  `arp -a` 的 ifscope 条目取网关；仍拿不到才回落 `10.0.0.1`。
-- Lume 无 exec 内置：所有系统调用（arp/ping/登录路由器）都在宿主脚本里做，
-  Lume 侧只读 JSON 快照出 API。
+- Data is a near-real-time snapshot of the **latest launchd round** (every 60s by
+  default); "Refresh" re-reads the latest on-disk snapshot; slow endpoints
+  (router-traffic history) resolve asynchronously, and "Refreshing…" stays at least
+  1.2s to give clear feedback.
+- Traffic trend / average rate / active-idle classification all depend on
+  **accumulated history** (`.data/router_traffic_hist*.json`); right after deployment
+  or after the history is cleared, wait ~10 minutes for the loop to build a baseline —
+  deltas are treated as "unknown" until then, no false alerts.
+- After login rate-limit (`Too_Many_user`), `router_fetch.py` cools down for 5 minutes:
+  during cooldown/stale-data reuse it **doesn't write points into the traffic history**
+  (avoiding fake flat "traffic=0" lines), and the UI shows a "reusing last client data"
+  hint.
+- `route get default` is blocked by the OS in restricted environments (e.g. some
+  sandboxes); the script falls back to parsing the ifscope entries of `arp -a` for the
+  gateway; if that fails too it falls back to `10.0.0.1`.
+- Lume has no exec built-in: all system calls (arp/ping/router login) happen in host
+  scripts; the Lume side only reads JSON snapshots and serves APIs.

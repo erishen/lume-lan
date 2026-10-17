@@ -176,7 +176,11 @@ const SITES: Site[] = [
   { key: "amazonaws", name: "AWS", kind: "cdn" },
   { key: "digicert", name: "证书服务", kind: "cdn" },
   { key: "letsencrypt", name: "证书服务", kind: "cdn" },
-].sort((a, b) =>
+];
+/* 排序: 长 key 优先(避免短 key 误匹配), 同长时 sdk 排后。
+ * 注: 排序必须与声明分离——数组字面量 >100 元素时 `.sort()` 链会阻断
+ * 上下文类型推断(kind 被加宽为 string), TS2322; 先声明再原地 sort 保持类型严格。 */
+SITES.sort((a, b) =>
   b.key.length - a.key.length ||
   ((b.kind === "sdk" ? 1 : 0) - (a.kind === "sdk" ? 1 : 0)));
 

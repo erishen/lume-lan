@@ -119,6 +119,9 @@ export interface RouterTrafficPayload {
   note?: string;
   /** {ip: DeviceTrafficPoint[]} 每设备的累计流量序列(按 ts 升序)。 */
   series?: Record<string, DeviceTrafficPoint[]>;
+  /** 近 5h 增量(每 IP 300 点序列首尾 rx/tx 差; 历史不足 2 点的设备不在表内)。
+   * 宿主 router_fetch.py 生成, 供「近 5h」流量排行。 */
+  hist5h?: Record<string, { rx: number; tx: number; n: number }>;
   ip_count?: number;
 }
 

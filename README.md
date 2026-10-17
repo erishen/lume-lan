@@ -6,6 +6,24 @@ Lume 服务端把它们做成 HTTP API，React 界面展示。
 
 照 `lume-crm` 的范式（`.lume` 服务端 + esbuild 打 React 进 `www/` + Makefile 串联）搭的。
 
+## 生态与血缘
+
+> ⚠️ **`lume` 是自研的 C11 Web 应用引擎**，与 Deno 生态的 [lumeland/lume](https://github.com/lumeland/lume)（静态站生成器）**无关**，
+> 也不是 [lume/lume](https://github.com/lume/lume)（CSS3D/WebGL 工具库）。撞名纯属巧合。
+
+本仓库是 **lume 生态**的一员：
+
+| 项目 | 是什么 | 链接 |
+|---|---|---|
+| **lume** | 完整框架：单二进制 C11 后端（`.lume` DSL + HTTP/SSE/SSR + SQLite + agent 工具） | https://github.com/erishen/lume |
+| **lume-core** | 语言核心：词法/语法/类型检查 + 解释器 / LLVM 发射（host 无关） | https://github.com/erishen/lume-core |
+| **lume-crm** | 用 lume 完整构建 CRM 后台的蓝本 | https://github.com/erishen/lume-crm |
+| **lume-talentlens** | 读 GitHub 足迹出「人才信号」的招聘仪表盘 | https://github.com/erishen/lume-talentlens |
+| **lume-nsgm** | AI 友好的确定性 CRUD 生成层（schema → 全栈 CRUD 工程） | https://github.com/erishen/lume-nsgm |
+| **lume-lan（本仓库）** | 局域网设备 + DNS + 流量看板 | 待公开 |
+
+**lume 与 lume-core 的区别**：**lume-core 是语言**——同一种 `.lume` 源码在解释器 / LLVM IR 文本 / libLLVM C API 三个后端上类型检查与执行结果一致，不依赖任何运行时；**lume 是框架**——在 lume-core 之上接入 agent-httpd（HTTP / SSE 聊天 / MCP / 会话）与原生 SQLite，一个 ~1.7 MB 可执行文件就能 serve 静态站 + JSON API + 聊天 + agent。生态里的应用（crm / talentlens / nsgm / lan）都构建在这层之上。
+
 ## 能展示什么
 
 看板按 Tab 组织：**总览 / 设备 / 域名访问**（Tab 栏的设备/域名数字是实时计数）。

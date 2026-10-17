@@ -38,13 +38,14 @@ services:
       # 容器内自刷新路由器(=1 开, 打 ROUTER_HOST); arp 仍靠宿主
       REFRESH: "0"
       REFRESH_SECS: "60"
-      # 路由器
-      ROUTER_HOST: "192.168.3.1"
-      ROUTER_USER: "admin"
-      ROUTER_PASS: "${ROUTER_PASS:-}"   # 宿主 shell export 或 .env 提供, 不进镜像
-      # 告警推送(容器内 REFRESH=1 时数据循环会评估告警; 不配则容器内只打印日志)
-      WEBHOOK_URL: "${WEBHOOK_URL:-}"
-      WEBHOOK_SECRET: "${WEBHOOK_SECRET:-}"
+      # 路由器 / 告警推送凭据: 仅在 REFRESH=1 时容器才需要, 默认只 serve 模式不注入,
+      # 避免凭据进入容器环境(容器被攻破也拿不到路由器密码/webhook 密钥)。
+      # 需要容器内自刷新时再打开:
+      # ROUTER_HOST: "192.168.3.1"
+      # ROUTER_USER: "admin"
+      # ROUTER_PASS: "${ROUTER_PASS:-}"
+      # WEBHOOK_URL: "${WEBHOOK_URL:-}"
+      # WEBHOOK_SECRET: "${WEBHOOK_SECRET:-}"
       # 局域网 Basic Auth: htpasswd 文件由 make docker-up 前的 .runtime/htpasswd 提供
       # (生成: htpasswd -c -b -B -C 12 .runtime/htpasswd admin <密码>)
       HTPASSWD_FILE: "/auth/htpasswd"

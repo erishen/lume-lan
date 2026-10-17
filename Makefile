@@ -217,16 +217,17 @@ docker-build-multiarch:
 docker-run: scan router-fetch
 	@echo "▶ http://127.0.0.1:$(DOCKER_PORT)/  (宿主:$(DOCKER_PORT) → 容器:8091; .data/ 已挂载)"
 	@if [ -n "$(ROUTER_PASS)" ]; then \
-		docker run --rm -p $(DOCKER_PORT):8091 -v $$(pwd)/.data:/app/.data \
+		docker run --rm -p $(DOCKER_PORT):8091 -v $$(pwd)/.data:/app/.data:ro \
 			-e ROUTER_PASS="$(ROUTER_PASS)" -e ROUTER_HOST="$(ROUTER_HOST)" $(DOCKER_IMAGE); \
 	else \
-		docker run --rm -p $(DOCKER_PORT):8091 -v $$(pwd)/.data:/app/.data \
+		docker run --rm -p $(DOCKER_PORT):8091 -v $$(pwd)/.data:/app/.data:ro \
 			-e ROUTER_HOST="$(ROUTER_HOST)" $(DOCKER_IMAGE); \
 	fi
 
 # 后台起 / 停。主 docker-compose.yml 只含 lume-lan 看板(AdGuard 已迁宿主 launchd)。
 # 宿主 web 端口: 看板 DOCKER_PORT(10091); AdGuard 控制台 ADGUARD_PORT(10095), 由宿主服务提供。
 docker-up:
+	@[ -f .runtime/htpasswd ] || { echo "✗ .runtime/htpasswd 不存在——先 make auth-pass 生成看板凭据(compose 挂载它做 Basic Auth, 缺失会挂空目录)"; exit 1; }
 	@echo "▶ 起看板容器 → http://127.0.0.1:$(DOCKER_PORT)/  (AdGuard 是宿主服务: make adguard-up)"
 	@DOCKER_PORT=$(DOCKER_PORT) docker compose up -d
 	@echo "  (设备 DNS 首选指 <本机IP>:53 才有域名记录; 没配 AdGuard 也不影响看板)"

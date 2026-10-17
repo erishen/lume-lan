@@ -8,6 +8,8 @@
 #
 #   B) 容器内自刷新路由器(REFRESH=1, 打 ROUTER_HOST):
 #        路由器/流量/终端在容器内循环更新; arp 快照仍靠宿主(容器无宿主网卡)。
+#        须同时 DATA_MODE=rw(默认 ro 会挡写 .data): export REFRESH=1 DATA_MODE=rw
+#        (或 .env 加 REFRESH=1 / DATA_MODE=rw) 再 docker compose up -d。
 #
 # AdGuard Home(DNS 记录「谁访问了什么域名」)已迁出容器 → Mac 宿主 launchd 服务
 #   (com.<user>.adguardhome, 见 ~/Library/LaunchAgents/ + ~/Applications/AdGuardHome/)。
@@ -35,8 +37,9 @@ services:
     environment:
       # serve 侧
       LUME_BIND: "0.0.0.0"
-      # 容器内自刷新路由器(=1 开, 打 ROUTER_HOST); arp 仍靠宿主
-      REFRESH: "0"
+      # 容器内自刷新路由器(=1 开, 打 ROUTER_HOST); arp 仍靠宿主。
+      # 注意: REFRESH=1 时须同时 DATA_MODE=rw(见 volumes 注释), 否则写 .data 报只读。
+      REFRESH: "${REFRESH:-0}"
       REFRESH_SECS: "60"
       # 路由器 / 告警推送凭据: 仅在 REFRESH=1 时容器才需要, 默认只 serve 模式不注入,
       # 避免凭据进入容器环境(容器被攻破也拿不到路由器密码/webhook 密钥)。
@@ -50,9 +53,11 @@ services:
       # (生成: htpasswd -c -b -B -C 12 .runtime/htpasswd admin <密码>)
       HTPASSWD_FILE: "/auth/htpasswd"
     volumes:
-      # 宿主 make scan / make router-fetch 产出的快照; 容器只读它出 /api/*(只 serve,
-      # 不写宿主数据; 容器被攻破也改不了/删不了快照)
-      - ./.data:/app/.data:ro
+      # 宿主 make scan / make router-fetch 产出的快照; 默认容器只读它出 /api/*(只 serve,
+      # 不写宿主数据; 容器被攻破也改不了/删不了快照)。
+      # 容器内自刷新(REFRESH=1)需写 .data → DATA_MODE=rw:  docker compose up -d 前
+      # export DATA_MODE=rw(或 .env 加 DATA_MODE=rw)。
+      - ./.data:/app/.data:${DATA_MODE:-ro}
       # 看板 Basic Auth 凭据(只读挂载, 不进镜像)
       - ./.runtime/htpasswd:/auth/htpasswd:ro
       # 可选: 路由凭据文件(若不用上面 ROUTER_PASS env)

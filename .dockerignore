@@ -10,7 +10,6 @@ node_modules
 
 # 逆向研究用的前端 JS 快照(非运行期需要)
 docs
-.runtime
 
 # 开发期杂项
 *.log

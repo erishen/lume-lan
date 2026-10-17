@@ -35,6 +35,7 @@ def _save_state(st: dict) -> None:
     tmp = STATE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(st, f, ensure_ascii=False, indent=2)
+    os.chmod(tmp, 0o600)
     os.replace(tmp, STATE)
 
 

@@ -47,6 +47,7 @@ def _save_blocklist(st: dict) -> None:
     tmp = BLOCKLIST + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(st, f, ensure_ascii=False, indent=2)
+    os.chmod(tmp, 0o600)
     os.replace(tmp, BLOCKLIST)
 
 

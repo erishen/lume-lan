@@ -315,6 +315,32 @@ def _load_last_devices() -> dict:
 HIST = os.path.join(ROOT, ".data", "router_traffic_hist.json")
 HIST_TOTAL = os.path.join(ROOT, ".data", "router_traffic_hist_total.json")
 HIST_CAP = 300      # 每 IP 保留的历史点数上限(60s 一循环 ≈ 5 小时, 远超基线所需)
+# 精简版流量历史(供 /api/router-traffic 原样下发)。Lume 响应约 256KB 上限,
+# 全量 HIST(≈420KB) 会被截断导致前端 JSON 解析失败; 这里只保留:
+#   series: 每 IP 近 90 点曲线(设备详情卡用) + hist5h: 300 点序列首尾差(近 5h 增量排行用)
+PAYLOAD = os.path.join(ROOT, ".data", "router_traffic_payload.json")
+PAYLOAD_TAIL = 90   # 曲线下发保留点数(≈ 90 分钟)
+
+
+def _save_traffic_payload(hist: dict) -> None:
+    """从全量历史生成精简 payload(原子写)。"""
+    series, hist5h = {}, {}
+    for ip, seq in hist.items():
+        total = len(seq)
+        series[ip] = seq[-PAYLOAD_TAIL:] if total > PAYLOAD_TAIL else seq
+        if total >= 2:
+            hist5h[ip] = {
+                "rx": max(0, seq[-1].get("rx", 0) - seq[0].get("rx", 0)),
+                "tx": max(0, seq[-1].get("tx", 0) - seq[0].get("tx", 0)),
+                "n": total,
+            }
+    payload = {"available": True, "series": series, "hist5h": hist5h, "ip_count": len(hist)}
+    os.makedirs(os.path.dirname(PAYLOAD), exist_ok=True)
+    tmp = PAYLOAD + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, PAYLOAD)
 
 
 def record_total_traffic(devices: list, fetched_at: int) -> list:
@@ -343,6 +369,7 @@ def record_total_traffic(devices: list, fetched_at: int) -> list:
     tmp = HIST_TOTAL + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(hist, f, ensure_ascii=False)
+    os.chmod(tmp, 0o600)
     os.replace(tmp, HIST_TOTAL)
     return hist
 
@@ -371,6 +398,7 @@ def _save_hist(hist: dict) -> None:
     tmp = HIST + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(hist, f, ensure_ascii=False)
+    os.chmod(tmp, 0o600)
     os.replace(tmp, HIST)
 
 
@@ -406,6 +434,7 @@ def apply_traffic_deltas(devices: list, fetched_at: int) -> None:
                 series.pop(0)
             hist[ip] = series
     _save_hist(hist)
+    _save_traffic_payload(hist)   # 精简版供 /api/router-traffic 下发(绕开 Lume 256KB 响应上限)
 
 
 _FAIL_TS = os.path.join(ROOT, ".runtime", "router_login_fail_ts")
@@ -447,7 +476,8 @@ def _load_last_wan_topo() -> tuple:
 
 # ---- 告警: 新设备进网 / WAN 状态跳变 / 异常流量(状态去重, 首次静默建基线) ----
 ALERT_STATE = os.path.join(ROOT, ".data", "alert_state.json")
-ANOMALY_BYTES = 10 * 1024 * 1024 * 1024   # 近 1h 增量 >= 10GB 判异常(与前端告警同阈值)
+# 近 1h 增量 >= 10GB 判异常(与前端告警同阈值)。
+ANOMALY_BYTES = 10 * 1024 * 1024 * 1024
 ANOMALY_RESEND_SECS = 1800                 # 同设备异常告警 30min 去重
 
 
@@ -481,6 +511,7 @@ def _save_alert_state(st: dict) -> None:
         tmp = ALERT_STATE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(st, f, ensure_ascii=False, indent=2)
+        os.chmod(tmp, 0o600)
         os.replace(tmp, ALERT_STATE)
     except OSError:
         pass
@@ -726,6 +757,7 @@ def main():
     tmp = OUT + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(payload_out, f, ensure_ascii=False, indent=2)
+    os.chmod(tmp, 0o600)
     os.replace(tmp, OUT)
 
     # 告警评估(仅 fresh 登录成功时: 新设备进网 / WAN 跳变 / 异常流量)。

@@ -57,12 +57,59 @@ def is_noise(ip: str, mac: str, iface: str = "") -> bool:
     return False
 
 
-def _gateway_from_arp() -> str:
+def _is_virtual_iface(name: str) -> bool:
+    """虚拟/隧道接口名（macOS Docker bridge100-108、VPN utun/tun/tap/ppp/ipsec/awdl、
+    Linux docker0/veth/wg/tailscale 等）。真实 LAN 网关只会出现在物理网卡
+    （以太网/Wi-Fi）上；VPN/隧道瞬时接管默认路由时网关会变成虚拟口上的假 IP
+    （如 74.125.250.129），这种网关一律不采信，否则看板网关与扫描网段会被带偏。"""
+    n = (name or "").lower()
+    return n.startswith(("utun", "tun", "tap", "ppp", "ipsec", "awdl",
+                         "bridge", "docker", "veth", "wg", "tailscale"))
+
+
+def _host_ipv4s() -> dict:
+    """{接口: IPv4} — 本机各接口地址（macOS/Linux ifconfig 兼容：inet 与 inet addr: 两种格式）。"""
+    ips: dict = {}
+    try:
+        out = subprocess.run(["ifconfig"], capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return ips
+    cur = None
+    for line in out.splitlines():
+        m = re.match(r"^(\S+):", line)
+        if m:
+            cur = m.group(1)
+            continue
+        m = re.search(r"\binet\s+(?:addr:)?(\d+\.\d+\.\d+\.\d+)", line)
+        if m and cur:
+            ips[cur] = m.group(1)
+    return ips
+
+
+def _same_lan(ip: str, host_ips: dict, prefix: int = 16) -> bool:
+    """候选网关是否与本机任一接口 IP 同网段（默认 /16 宽松校验：家庭/办公网
+    网关必然和本机同网段；VPN/隧道假网关如 74.125.x.x 必然对不上 192.168.x.x）。"""
+    try:
+        cand_net = detect_network(ip, prefix)
+    except Exception:
+        return False
+    for hip in host_ips.values():
+        try:
+            if detect_network(hip, prefix) == cand_net:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _gateway_from_arp(host_ips: dict = None) -> str:
     """兜底：macOS arp -a 里网关那条带 ifscope 标记（如
     "? (192.168.3.1) at c4:6:8:… on en0 ifscope [ethernet]"）。
 
     注意 ifscope 会有多条——广播条目（.0，MAC ff:ff:ff:ff:ff:ff）与真网关
-    （MAC 是真实单播）。route 被 OS 拦时用它：取「MAC 非广播」的首条。"""
+    （MAC 是真实单播）。route 被 OS 拦时用它：取「物理接口上、与本机同网段、
+    MAC 非广播」的首条（跳过 Docker/VPN 虚拟接口的 ifscope 条目，如 bridge108
+    上 74.125.250.129 那种；host_ips 拿不到时退化为只跳过虚拟接口）。"""
     mac_re = re.compile(r"([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})")
     try:
         out = subprocess.run(["arp", "-a"], capture_output=True, text=True, timeout=10).stdout
@@ -72,11 +119,18 @@ def _gateway_from_arp() -> str:
             m_mac = mac_re.search(line)
             if m_mac and m_mac.group(1).lower() == "ff:ff:ff:ff:ff:ff":
                 continue  # 广播条目不是网关
+            m_if = re.search(r"\bon\s+(\w+)", line)
+            iface = m_if.group(1) if m_if else ""
+            if _is_virtual_iface(iface):
+                continue
             m = re.search(r"\((\d+\.\d+\.\d+\.\d+)\)", line) or re.search(
                 r"^\s*(\d+\.\d+\.\d+\.\d+)\s", line
             )
             if m:
-                return m.group(1)
+                cand = m.group(1)
+                if host_ips and not _same_lan(cand, host_ips):
+                    continue
+                return cand
     except Exception:
         pass
     return ""
@@ -85,19 +139,29 @@ def _gateway_from_arp() -> str:
 def detect_gateway() -> str:
     """从系统默认路由抓网关 IP（跨 macOS/Linux，不依赖 ip 命令）。
 
-    顺序：route get default（宿主终端正常）→ arp ifscope 条目（受限环境）
-    → 兜底 10.0.0.1。
+    顺序：route get default（且出口为物理接口、网关与本机同网段）
+    → arp ifscope 条目（受限环境）→ 兜底 10.0.0.1。
+
+    加固点：Docker/VPN 的虚拟接口（bridge100-108、utun 等）会瞬时接管默认路由，
+    route get default 会返回虚拟口上的假网关（如 74.125.250.129），直接信任会
+    把看板网关/扫描网段带偏，所以「虚拟接口」与「非同网段」的网关一律不采信。
     """
+    host_ips = _host_ipv4s()
     try:
         out = subprocess.run(
             ["route", "get", "default"], capture_output=True, text=True, timeout=5
         ).stdout
-        m = re.search(r"gateway:\s*(\d+\.\d+\.\d+\.\d+)", out)
-        if m:
-            return m.group(1)
+        m_gw = re.search(r"gateway:\s*(\d+\.\d+\.\d+\.\d+)", out)
+        m_if = re.search(r"interface:\s*(\S+)", out)
+        gw = m_gw.group(1) if m_gw else ""
+        iface = m_if.group(1) if m_if else ""
+        if gw and iface and not _is_virtual_iface(iface) and (not host_ips or _same_lan(gw, host_ips)):
+            return gw
+        if gw:
+            print(f"  [scan] 默认路由出口 {iface or '?'} 上的网关 {gw} 不可信(虚拟接口/非同网段), 走 arp 兜底")
     except Exception:
         pass
-    gw = _gateway_from_arp()
+    gw = _gateway_from_arp(host_ips)
     if gw:
         return gw
     return "10.0.0.1"
@@ -220,17 +284,19 @@ def main():
     tmp = OUT + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.chmod(tmp, 0o600)
     os.replace(tmp, OUT)  # 原子替换，Lume 侧读到的是完整文件
     print(f"wrote {OUT}: {len(devices)} device(s) (gateway {gw}, sweep={sweep})")
 
 
-def detect_network(gw: str) -> str:
-    """网关所在 /24 的网络地址（192.168.3.1 → 192.168.3.0）。"""
-    import struct
+def detect_network(gw: str, prefix: int = 24) -> str:
+    """IP 所在网络地址（默认 /24）。192.168.3.1 → 192.168.3.0。
 
-    packed = struct.pack(">I", int(ip_address(gw)))
-    network = struct.unpack(">I", packed[:2] + b"\x00\x00")[0]
-    return str(ip_address(network))
+    旧实现误把后两段清零（192.168.3.1 → 192.168.0.0），导致看板网段显示错误、
+    LAN_SWEEP 扫错网段；此处只清零最后一段，prefix 可放宽（如 /16 供同网段校验）。
+    """
+    from ipaddress import IPv4Network
+    return str(IPv4Network(f"{gw}/{prefix}", strict=False).network_address)
 
 
 if __name__ == "__main__":

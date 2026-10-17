@@ -10,13 +10,13 @@
     → Lume 出 /api/dns → 前端「域名访问」区。
 
 配置(.env, shell env 优先):
-    ADGUARD_HOST=127.0.0.1     AdGuard Home 容器宿主端口映射(ADGUARD_PORT, 默认 10095)所在主机
-    ADGUARD_PORT=10095        宿主发布端口(容器内 web 起在 3000, 宿主映射到 10095, >10000 约定)
+    ADGUARD_HOST=127.0.0.1     AdGuard Home 所在主机(宿主服务, 默认本机)
+    ADGUARD_PORT=10095        控制台/API 端口(宿主服务直绑, >10000 约定)
     ADGUARD_USER=admin       控制台账号(向导设的), 登录态 API 用
     ADGUARD_PASS=aglan       控制台密码
 
 说明: 新版 AdGuard(>=0.107) API 前缀是 /control(旧版是 /v3)。本部署 users=[] 关掉了
-      web 认证(局域网内部工具, 仅 Docker 端口映射到本机), 所以 /control/querylog 免登录直读。
+      web 认证(局域网内部工具, 仅本机监听), 所以 /control/querylog 免登录直读。
       没装好前 /control/ 一律 302 到安装页, 脚本标记 reachable=false 降级。
 
 AdGuard 未运行/不通: 保留旧快照并标记 reachable=false(UI 显示「未连接」), 不崩。
@@ -60,14 +60,22 @@ def load_env() -> dict:
 
 
 def _parse_ts(s) -> int:
-    """把 AdGuard 的 ISO 时间(如 2026-10-16T16:18:34.860251365+08:00)转 epoch 秒。
-    截断到 6 位小数(fromisoformat 上限); 无时区按本机时区。解析失败返回 0。"""
+    """把 AdGuard 的 ISO 时间(如 2026-10-16T20:45:30.347942+08:00)转 epoch 秒。
+
+    不能直接依赖 fromisoformat: Python 3.9 只收 3/6 位小数秒, 而 AdGuard 不同版本
+    会写不同位数(容器版 9 位 .860251365, 宿主版 6 位 .347942)。这里手动切分
+    base+小数+时区, 小数统一截/补成 6 位再解析。解析失败返回 0。"""
     if not s:
         return 0
     import re
     from datetime import datetime
-    s = str(s).strip()
-    s2 = re.sub(r"(\.\d{1,6})\d+", r"\1", s)   # 截断小数秒到 6 位
+    m = re.match(r"^(.+T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})?$",
+                 str(s).strip())
+    if not m:
+        return 0
+    base, frac, tz = m.groups()
+    frac = (frac or "")[:6].ljust(6, "0") if frac else ""
+    s2 = base + (("." + frac) if frac else "") + (tz or "")
     s2 = s2.replace("Z", "+00:00")
     try:
         dt = datetime.fromisoformat(s2)
@@ -84,6 +92,11 @@ def get_querylog(host: str, port: str, limit: int, user: str = "", pw: str = "")
     base = f"http://{host}:{port}"
     url = f"{base}/control/querylog?skip=0&limit={limit}"
     req = urllib.request.Request(url, headers={"User-Agent": "lume-lan"})
+    if user and pw:
+        # 开认证后(users 非空)必须带 Basic Auth, 否则 /control/* 一律 401。
+        import base64 as _b64
+        token = _b64.b64encode(f"{user}:{pw}".encode("utf-8")).decode("ascii")
+        req.add_header("Authorization", f"Basic {token}")
     with urllib.request.urlopen(req, timeout=15) as r:
         data = json.loads(r.read())
     return data.get("data", [])
@@ -114,10 +127,14 @@ def build(entries: list, now: int) -> dict:
         name = (q.get("name") or "").lower().rstrip(".")
         if not name or name == "":
             continue
-        # 拦截判断: 有 filterId = 被规则拦; 或 reason 含 Filtered
+        # 拦截判断: 有 filterId 且 reason 不是白名单放行 = 被规则拦。
+        # 注意不能用 "Filtered" in reason —— "NotFilteredNotFound"(未拦截) 也含该子串,
+        # 会把所有查询误判成拦截(旧 bug)。reason 取值(0.107+):
+        #   FilteredBlackList=拦截 / FilteredWhiteList=白名单放行(不算拦) /
+        #   NotFilteredNotFound=未命中规则(正常放行)
         filter_id = e.get("filterId")
         reason = e.get("reason") or ""
-        blocked = bool(filter_id) or "Filtered" in reason
+        blocked = bool(filter_id) and reason != "FilteredWhiteList"
 
         cname = ((e.get("client_info") or {}).get("name")) or ""
         c = clients.setdefault(cip, {"name": cname, "total": 0, "blocked": 0,
@@ -180,6 +197,7 @@ def main() -> None:
         payload = build(entries, now)
         tmp = SNAP.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        os.chmod(tmp, 0o600)
         tmp.replace(SNAP)
         print(f"✓ .data/dns.json: 近 1h {payload['query_count']} 条查询, "
               f"{payload['client_count']} 客户端, Top域 {payload['top_domains'][0]['domain'] if payload['top_domains'] else '—'}")
@@ -200,6 +218,7 @@ def main() -> None:
             mark["stale_since"] = old.get("fetched_at", 0)
         tmp = SNAP.with_suffix(".tmp")
         tmp.write_text(json.dumps(mark, ensure_ascii=False), encoding="utf-8")
+        os.chmod(tmp, 0o600)
         tmp.replace(SNAP)
         print(f"⚠ AdGuard({host}:{port}) 不可达: {ex}"
               + ("(已标记 stale, 保留旧数据)" if old else "(无旧数据)"))

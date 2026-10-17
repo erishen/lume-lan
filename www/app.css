@@ -177,7 +177,7 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
   color: var(--muted);
 }
 .empty-box .btn { margin-top: 12px; }
-.loading { padding: 32px; text-align: center; color: var(--muted); }
+.loading { padding: 32px; text-align: center; color: var(--muted); display: flex; justify-content: center; }
 .fetchline { margin-top: 10px; font-size: 0.78rem; color: var(--muted); text-align: right; }
 
 /* 路由器信息区 */
@@ -396,6 +396,11 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .tabs-right { margin-left: auto; display: flex; align-items: center; gap: 10px; white-space: nowrap; flex: 0 0 auto; }
 .tabs-right .btn { min-width: 92px; justify-content: center; }
 .tabs .hint { font-size: 0.8rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 38vw; }
+/* 窗口很窄时隐藏次要的「快照于」文案, 保证右侧组(刷新/刷新中…)永远放得下、
+ * margin-left:auto 一定能把它推到最右——不随 Tab 行换行掉到左侧。 */
+@media (max-width: 640px) {
+  .tabs-right .hint { display: none; }
+}
 .tabpanel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
 
 /* 总览: 完整终端列表入口提示(列表本体移入「设备」Tab) */

@@ -26,7 +26,7 @@ This repository is a member of the **lume ecosystem**:
 | **lume-crm** | A blueprint CRM admin built entirely with lume | https://github.com/erishen/lume-crm |
 | **lume-talentlens** | Recruiting dashboard surfacing "talent signals" from GitHub footprints | https://github.com/erishen/lume-talentlens |
 | **lume-nsgm** | AI-friendly deterministic CRUD generation layer (schema → full-stack CRUD project) | https://github.com/erishen/lume-nsgm |
-| **lume-lan (this repo)** | LAN device + DNS + traffic dashboard | coming soon |
+| **lume-lan (this repo)** | LAN device + DNS + traffic dashboard | https://github.com/erishen/lume-lan |
 
 **lume vs lume-core**: **lume-core is the language + core runtime** — the same `.lume`
 source type-checks and runs identically on all three backends (interpreter / LLVM IR

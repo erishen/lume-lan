@@ -308,6 +308,12 @@ function DnsGuide({ dns, dnsTarget }: {
   );
 }
 
+/* 域名 → 可点击链接: PTR 反解析记录(129.x.in-addr.arpa)没有网站可开, 不加链接。 */
+function domainHref(d: string): string | null {
+  if (d.endsWith(".in-addr.arpa") || d.endsWith(".ip6.arpa")) return null;
+  return "https://" + d;
+}
+
 /** 全家域名 Top（条形图，拦截的排前 + 红标）。 */
 function DnsTopList({ top }: { top: DnsDomain[] }): React.ReactElement | null {
   if (!top.length) {
@@ -319,10 +325,14 @@ function DnsTopList({ top }: { top: DnsDomain[] }): React.ReactElement | null {
       <div className="dnstop-title">全家域名 Top {top.length}<span className="rtrtop-hint">· 拦截的排前</span></div>
       {top.map((t, i) => {
         const s = siteName(t.domain);
+        const href = domainHref(t.domain);
         return (
           <div key={i} className={"dnstop-row" + (t.blocked > 0 ? " blocked" : "")} title={new Date((t.last_ts || 0) * 1000).toLocaleString("zh-CN")}>
             <span className={"rtrtop-rank" + (i === 0 ? " top" : "")}>{i + 1}</span>
-            <span className="dnstop-dom mono">{t.domain}{s ? <em className="sitename">{s.name}</em> : null}</span>
+            <span className="dnstop-dom mono">
+              {href ? <a href={href} target="_blank" rel="noopener noreferrer">{t.domain}</a> : t.domain}
+              {s ? <em className="sitename">{s.name}</em> : null}
+            </span>
             <div className="dnstop-bar"><div style={{ width: Math.round((t.count / maxTop) * 100) + "%" }} /></div>
             <span className="dnstop-cnt">{t.count} 次</span>
             {t.blocked > 0 ? <span className="dnstop-blk">拦截 {t.blocked}</span> : null}
@@ -366,9 +376,11 @@ function DnsClients({ clients, clientIps, ipNames }: {
                 <div className="dnsc-domains">
                   {show.map((t, i) => {
                     const s = siteName(t.domain);
+                    const href = domainHref(t.domain);
                     return (
                       <span key={i} className={"dnsc-dom" + (t.blocked > 0 ? " blocked" : "")}>
-                        {t.domain}{s ? <em className="sitename">{s.name}</em> : null}<em>{t.count}×</em>
+                        {href ? <a href={href} target="_blank" rel="noopener noreferrer">{t.domain}</a> : t.domain}
+                        {s ? <em className="sitename">{s.name}</em> : null}<em>{t.count}×</em>
                       </span>
                     );
                   })}

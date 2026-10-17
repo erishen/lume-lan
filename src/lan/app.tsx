@@ -781,9 +781,10 @@ function Dashboard(): React.ReactElement {
             <button type="button" className={"tab" + (tab === "dns" ? " sel" : "")} onClick={() => setTab("dns")}>
               域名访问{dns && (dns.client_count ?? 0) > 0 ? <span className="badge">{dns.client_count}</span> : null}
             </button>
-            <span className="tabs-spacer" />
-            <span className="hint">快照于 {fmtTs(data.scanned_at)}</span>
-            <button className="btn" disabled={refreshing} onClick={() => void load()}>{refreshing ? "刷新中…" : "刷新"}</button>
+            <span className="tabs-right">
+              <span className="hint">快照于 {fmtTs(data.scanned_at)}</span>
+              <button className="btn" disabled={refreshing} onClick={() => void load()}>{refreshing ? "刷新中…" : "刷新"}</button>
+            </span>
           </nav>
 
           {(data.stale || data.note) ? <div className={"banner " + (data.stale ? "warn" : "")}>{data.note}</div> : null}

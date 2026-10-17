@@ -393,8 +393,9 @@ table.devs td .devname::before { content: ""; display: inline-block; width: 7px;
 .tab.sel { color: var(--fg); font-weight: 700; background: var(--card); border-color: var(--line); border-bottom-color: var(--card); }
 .tab .badge { font-size: 0.72rem; font-weight: 700; padding: 1px 8px; border-radius: 10px; background: rgba(var(--accent-rgb), 0.12); color: var(--accent); line-height: 1.5; }
 .tab.sel .badge { background: var(--accent); color: #fff; }
-.tabs-spacer { flex: 1 0 0; min-width: 4px; }
-.tabs .hint { font-size: 0.8rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tabs-right { margin-left: auto; display: flex; align-items: center; gap: 10px; white-space: nowrap; flex: 0 0 auto; }
+.tabs-right .btn { min-width: 92px; justify-content: center; }
+.tabs .hint { font-size: 0.8rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 38vw; }
 .tabpanel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
 
 /* 总览: 完整终端列表入口提示(列表本体移入「设备」Tab) */

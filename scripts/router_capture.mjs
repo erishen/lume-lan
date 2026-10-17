@@ -32,7 +32,7 @@ function loadEnv() {
       if (m) map[m[1]] = m[2];
     }
   } catch {}
-  const host = (map.ROUTER_HOST || "http://192.168.3.1").replace(/^http:\/\//, "");
+  const host = (map.ROUTER_HOST || "http://192.168.1.1").replace(/^http:\/\//, "");
   return { host: `http://${host}`, user: map.ROUTER_USER || "admin", pass: map.ROUTER_PASS || "" };
 }
 

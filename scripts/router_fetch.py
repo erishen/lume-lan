@@ -322,10 +322,60 @@ PAYLOAD = os.path.join(ROOT, ".data", "router_traffic_payload.json")
 PAYLOAD_TAIL = 90   # 曲线下发保留点数(≈ 90 分钟)
 
 
-def _save_traffic_payload(hist: dict) -> None:
-    """从全量历史生成精简 payload(原子写)。"""
+def _dev_key(d: dict) -> str:
+    """流量历史的身份键：优先 MAC（设备身份稳定, 不受 DHCP 重新分配影响）,
+    无 MAC 时退回 `ip:<ip>`。加前缀是为了与旧格式(裸 IP 为键)区分, 便于迁移。"""
+    mac = str(d.get("mac") or "").strip().lower()
+    return f"mac:{mac}" if mac else f"ip:{str(d.get('ip') or '')}"
+
+
+def _migrate_hist(hist: dict, devices: list) -> dict:
+    """把旧格式(裸 IP 为键)迁到 `mac:`/`ip:` 身份键, 保留既有曲线。
+
+    旧点没有 `ip` 字段时补上原 IP(供 payload 按 IP 回填)。迁移用当前快照的
+    ip→mac 映射; 找不到对应设备的旧键退回 `ip:<ip>`(仍是有效的降级身份)。"""
+    if not hist:
+        return {}
+    ip2key = {}
+    for d in devices:
+        ip = str(d.get("ip") or "")
+        if ip:
+            ip2key[ip] = _dev_key(d)
+    out: dict = {}
+    for key, seq in hist.items():
+        if not isinstance(seq, list):
+            continue
+        if key.startswith(("mac:", "ip:")):
+            out.setdefault(key, []).extend(seq)
+            continue
+        nk = ip2key.get(key, f"ip:{key}")
+        for p in seq:
+            if isinstance(p, dict) and "ip" not in p:
+                p["ip"] = key
+        out.setdefault(nk, []).extend(seq)
+    for seq in out.values():
+        seq.sort(key=lambda p: p.get("ts", 0) if isinstance(p, dict) else 0)
+    return out
+
+
+def _save_traffic_payload(hist: dict, devices: list) -> None:
+    """从全量历史(按身份键 mac:/ip:)生成精简 payload(原子写)。
+
+    payload 仍按 **IP** 下发(前端按 IP 查曲线)。IP→序列 的映射以「当前快照的
+    设备」为准(权威当前属主), 再补上已消失在快照里的历史——这样 DHCP 复用同一
+    IP 时, 曲线归属当前设备而不是被旧设备的序列覆盖。"""
     series, hist5h = {}, {}
-    for ip, seq in hist.items():
+    seen = set()
+    keys = [_dev_key(d) for d in devices]
+    keys += [k for k in hist if k not in keys]   # 已离线/消失的历史, 追加在后
+    for k in keys:
+        seq = hist.get(k)
+        if not isinstance(seq, list) or not seq:
+            continue
+        ip = str(seq[-1].get("ip") or "")
+        if not ip or ip in seen:
+            continue
+        seen.add(ip)
         total = len(seq)
         series[ip] = seq[-PAYLOAD_TAIL:] if total > PAYLOAD_TAIL else seq
         if total >= 2:
@@ -334,7 +384,7 @@ def _save_traffic_payload(hist: dict) -> None:
                 "tx": max(0, seq[-1].get("tx", 0) - seq[0].get("tx", 0)),
                 "n": total,
             }
-    payload = {"available": True, "series": series, "hist5h": hist5h, "ip_count": len(hist)}
+    payload = {"available": True, "series": series, "hist5h": hist5h, "ip_count": len(series)}
     os.makedirs(os.path.dirname(PAYLOAD), exist_ok=True)
     tmp = PAYLOAD + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -406,35 +456,41 @@ def apply_traffic_deltas(devices: list, fetched_at: int) -> None:
     """给每台设备算 delta_1h(近 ~1h 的流量增量, 字节; null=历史太短未知),
     并把本轮累计值追加进历史。路由器流量计数器是单调累计值, 两点相减即增量。
 
+    历史按 **设备身份键**(MAC 优先, 见 _dev_key)索引: DHCP 重新分配 IP 后同一个
+    IP 下的新旧设备计数器不会被混算——每台设备只跟自己的曲线比。旧格式(按 IP 索引)
+    由 _migrate_hist 一次性迁移。
+
     基线取「至少 10 分钟前的最近一个点」: 这样数据循环跑 10 分钟起就能区分
     活跃/挂起(心跳级增量 < 1MB), 满 1h 后窗口精确到 1h; 历史太短(未满 10min)
     则返回 None, 前端按「活跃」显示, 避免误判。"""
     MIN_BASELINE_AGE = 600  # 基线点至少要距今 10 分钟
-    hist = _load_hist()
+    hist = _migrate_hist(_load_hist(), devices)
     for d in devices:
+        key = _dev_key(d)
         ip = str(d.get("ip") or "")
         cur_rx = d.get("rx_bytes") or 0
         cur_tx = d.get("tx_bytes") or 0
         d["delta_1h"] = None
-        series = hist.get(ip, []) if ip else []
+        d["delta_cycle"] = 0
+        series = hist.get(key, [])
         if series:
             cutoff = fetched_at - MIN_BASELINE_AGE
             base = [p for p in series if p.get("ts", 0) <= cutoff]
             if base:
                 b = base[-1]
                 d["delta_1h"] = max(0, cur_rx - b.get("rx", 0)) + max(0, cur_tx - b.get("tx", 0))
-        if ip:
+        # 既无 MAC 又无 IP 的条目无从索引, 跳过(不写脏键)。
+        if ip or key.startswith("mac:"):
             prev = series[-1] if series else None
-            d["delta_cycle"] = 0
             if prev:
                 # 本周期(距上一点, ~60s)增量, 供总流量点标注「主因设备」
                 d["delta_cycle"] = max(0, cur_rx - prev.get("rx", 0)) + max(0, cur_tx - prev.get("tx", 0))
-            series.append({"ts": fetched_at, "rx": cur_rx, "tx": cur_tx})
+            series.append({"ts": fetched_at, "rx": cur_rx, "tx": cur_tx, "ip": ip})
             while len(series) > HIST_CAP:
                 series.pop(0)
-            hist[ip] = series
+            hist[key] = series
     _save_hist(hist)
-    _save_traffic_payload(hist)   # 精简版供 /api/router-traffic 下发(绕开 Lume 256KB 响应上限)
+    _save_traffic_payload(hist, devices)  # 精简版供 /api/router-traffic 下发(绕开 Lume 256KB 响应上限)
 
 
 _FAIL_TS = os.path.join(ROOT, ".runtime", "router_login_fail_ts")
@@ -597,12 +653,13 @@ def check_alerts(devices: list, wan: dict, fetched_at: int) -> list:
         if dl is None or dl < ANOMALY_BYTES:
             continue
         ip = str(d.get("ip") or "?")
-        if fetched_at - int(last_ts.get(ip, 0) or 0) < ANOMALY_RESEND_SECS:
+        key = _dev_key(d)   # 去重键用设备身份(MAC), 换 IP 不重复告警
+        if fetched_at - int(last_ts.get(key, 0) or 0) < ANOMALY_RESEND_SECS:
             continue
         gb = dl / (1024 ** 3)
         lines.append(f"📈 异常流量: {_dev_label(d, aliases)}（{ip}）"
                      f"近 1h 流量 {gb:.1f} GB")
-        last_ts[ip] = fetched_at
+        last_ts[key] = fetched_at
 
     # 更新状态: known 并入全部当前 MAC(含离线, 防老设备回流误报); 异常时间戳; WAN 现状
     merged = {m: 1 for m in known}
@@ -752,6 +809,13 @@ def main():
                              and (d.get("delta_1h") is None or d.get("delta_1h", 0) >= 1048576)),
         "router_traffic_total": total_series,
         "probe": probe,
+        # —— 统一数据源状态契约(与 scan_lan/adguard_fetch 一致)——
+        # reachable = 免密身份层(deviceinfo)是否可达; 登录态另由 login.ok 表达。
+        # stale = 本轮沿用上次终端数据(登录失败/冷却); error = 登录或身份层的失败原因。
+        "reachable": bool(router.get("ok")),
+        "fetched_at": fetched_at,
+        "stale": stale,
+        "error": "" if login["ok"] else (login.get("error") or router.get("note") or ""),
     }
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     tmp = OUT + ".tmp"

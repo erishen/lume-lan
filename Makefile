@@ -158,6 +158,10 @@ unblock:
 check:
 	@$(LUME) --check lan.lume
 
+# 单元测试(标准库 unittest, 无第三方依赖): ping 平台参数 / host IP 回退 / 流量历史身份键。
+test:
+	@$(PY) -m unittest discover -s tests -v
+
 # 入口 bundle 落 www/app.js(单入口;当前无共享 chunk)。
 ui:
 	@$(ESBUILD) src/lan/app.tsx --bundle --minify --format=esm --jsx=automatic --outdir=www --outbase=src/lan

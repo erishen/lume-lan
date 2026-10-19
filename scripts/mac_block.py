@@ -7,7 +7,7 @@
 
 用法(make 目标见 Makefile):
   make block 192.168.1.99            # 按 IP 拉黑(自动解析成 MAC; 记 reason)
-  make block 84:9D:C2:72:7A:69       # 按 MAC 直接拉黑
+  make block AA:BB:CC:DD:EE:FF       # 按 MAC 直接拉黑
   make unblock 192.168.1.99          # 解除(从路由器黑名单 + 本地账本移除)
   make block-list                     # 看当前名单(路由器实态 + 本地账本)
 

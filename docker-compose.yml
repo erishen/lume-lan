@@ -32,8 +32,10 @@ services:
     restart: unless-stopped
     # 宿主侧发布端口走 DOCKER_PORT(默认 10091, >10000, 避开本地 make dev 的 8091);
     # 容器内 Lume 仍绑 8091。覆盖: make docker-run DOCKER_PORT=11091 或 export DOCKER_PORT。
+    # 默认只绑 127.0.0.1(仅本机可访问, 不向整个 LAN 暴露内网设备清单);
+    # 需 LAN 内其他设备访问再改成 "0.0.0.0:${DOCKER_PORT:-10091}:8091"。
     ports:
-      - "${DOCKER_PORT:-10091}:8091"
+      - "127.0.0.1:${DOCKER_PORT:-10091}:8091"
     environment:
       # serve 侧
       LUME_BIND: "0.0.0.0"

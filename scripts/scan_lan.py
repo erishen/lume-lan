@@ -33,7 +33,7 @@ SWEEP = os.environ.get("LAN_SWEEP") == "1"
 
 
 def norm_mac(m: str) -> str:
-    """c4:6:83:71:74:4 → c4:68:37:71:74:04（每段补零）。"""
+    """aa:bb:cc:dd:ee:f → aa:bb:cc:dd:ee:0f（每段补零）。"""
     parts = [p for p in m.split(":") if p != ""]
     if not parts:
         return ""
@@ -230,9 +230,9 @@ def arp_snapshot() -> list:
         out = subprocess.run(["arp", "-a"], capture_output=True, text=True, timeout=10).stdout
     except Exception:
         return []
-    # macOS:  ? (192.168.1.1) at c4:6:83:71:74:4 on en0 ifscope [ethernet]
+    # macOS:  ? (192.168.1.1) at aa:bb:cc:dd:ee:f on en0 ifscope [ethernet]
     #         192.168.1.1 at (incomplete) on en0
-    # Linux : 192.168.1.1 at c4:68:37:71:74:04 [ether] on en0
+    # Linux : 192.168.1.1 at aa:bb:cc:dd:ee:ff [ether] on en0
     mac_re = re.compile(r"([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})")
     for line in out.splitlines():
         m_ip = re.search(r"\((\d+\.\d+\.\d+\.\d+)\)", line) or re.search(

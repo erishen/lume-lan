@@ -221,10 +221,10 @@ docker-build-multiarch:
 docker-run: scan router-fetch
 	@echo "▶ http://127.0.0.1:$(DOCKER_PORT)/  (宿主:$(DOCKER_PORT) → 容器:8091; .data/ 已挂载)"
 	@if [ -n "$(ROUTER_PASS)" ]; then \
-		docker run --rm -p $(DOCKER_PORT):8091 -v $$(pwd)/.data:/app/.data:ro \
+		docker run --rm -p 127.0.0.1:$(DOCKER_PORT):8091 -v $$(pwd)/.data:/app/.data:ro \
 			-e ROUTER_PASS="$(ROUTER_PASS)" -e ROUTER_HOST="$(ROUTER_HOST)" $(DOCKER_IMAGE); \
 	else \
-		docker run --rm -p $(DOCKER_PORT):8091 -v $$(pwd)/.data:/app/.data:ro \
+		docker run --rm -p 127.0.0.1:$(DOCKER_PORT):8091 -v $$(pwd)/.data:/app/.data:ro \
 			-e ROUTER_HOST="$(ROUTER_HOST)" $(DOCKER_IMAGE); \
 	fi
 

@@ -18,6 +18,8 @@ lume-core 没有 exec/子进程内置，所以「取设备」的真实系统调�
     "devices": [ {"ip","mac","iface","live","source"} ]
   }
 """
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -43,11 +45,17 @@ def norm_mac(m: str) -> str:
 def is_noise(ip: str, mac: str, iface: str = "") -> bool:
     """过滤非真实设备：
     - 169.254/16 link-local
+    - 组播保留地址 224.0.0.0/4（239.255.255.250 SSDP、224.0.0.251 mDNS 等，非设备）
     - 广播 / 全 0 MAC
     - macOS 虚拟 bridge 接口（bridge100/106/... 是本机自分配子网，非真实 LAN 设备）
     - x.x.x.0 网络地址（ARP 表会列出虚拟子网的网络位，非可连设备）"""
     if ip.startswith("169.254."):
         return True
+    try:
+        if ip_address(ip).is_multicast:
+            return True
+    except Exception:
+        pass
     mm = mac.lower()
     if mm in ("", "ff:ff:ff:ff:ff:ff", "00:00:00:00:00:00"):
         return True
@@ -87,16 +95,76 @@ def _host_ipv4s() -> dict:
     return ips
 
 
-def _same_lan(ip: str, host_ips: dict, prefix: int = 16) -> bool:
-    """候选网关是否与本机任一接口 IP 同网段（默认 /16 宽松校验：家庭/办公网
-    网关必然和本机同网段；VPN/隧道假网关如 74.125.x.x 必然对不上 192.168.x.x）。"""
+def _netmask_to_prefix(mask: str) -> int | None:
+    """掩码 → 前缀长度：`0xffffff00` / `255.255.255.0` → 24。非法或非连续掩码返回 None。"""
+    m = (mask or "").strip()
     try:
-        cand_net = detect_network(ip, prefix)
+        if m.lower().startswith("0x"):
+            v = int(m, 16)
+            bits = f"{v:032b}"
+            if "01" in bits:  # 首尾相接才算合法掩码
+                return None
+            return bits.count("1")
+        from ipaddress import IPv4Network
+        return IPv4Network(f"0.0.0.0/{m}", strict=False).prefixlen
+    except Exception:
+        return None
+
+
+def _host_iface_networks() -> dict:
+    """{接口: IPv4Network} — 各接口网段，用**真实掩码**（`netmask`/`Mask:`/CIDR）；
+    解析不到掩码时退回 /24。用于同网段校验，避免固定 /16 把相邻子网误判为同网。"""
+    nets: dict = {}
+    try:
+        out = subprocess.run(["ifconfig"], capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return nets
+    from ipaddress import IPv4Network
+    cur = None
+    for line in out.splitlines():
+        m = re.match(r"^(\S+):", line)
+        if m:
+            cur = m.group(1)
+            continue
+        mi = re.search(r"\binet\s+(?:addr:)?(\d+\.\d+\.\d+\.\d+)(?:/(\d+))?", line)
+        if not mi or not cur:
+            continue
+        ip = mi.group(1)
+        prefix = int(mi.group(2)) if mi.group(2) else None
+        if prefix is None:
+            mm = re.search(r"\bnetmask\s+(\S+)", line) or re.search(r"\bMask:(\S+)", line)
+            if mm:
+                prefix = _netmask_to_prefix(mm.group(1))
+        if prefix is None:
+            prefix = 24
+        try:
+            nets[cur] = IPv4Network(f"{ip}/{prefix}", strict=False)
+        except Exception:
+            continue
+    return nets
+
+
+def _same_lan(ip: str, host_ips: dict, prefix: int | None = None) -> bool:
+    """候选网关是否与本机任一接口**同网段**。
+
+    默认按各接口**真实掩码**判断（`_host_iface_networks`，解析不到按 /24）——家庭/办公网
+    网关必然和本机同子网，而 VPN/隧道假网关（如 74.125.x.x）必然不在 `192.168.x.x/24` 内，
+    相邻 `192.168.5.x/24` 也不会被误判。显式传 prefix 时退化为固定前缀的宽松比较（兼容旧行为）。"""
+    try:
+        from ipaddress import IPv4Address, IPv4Network
+        cand = IPv4Address(ip)
     except Exception:
         return False
-    for hip in host_ips.values():
+    nets = _host_iface_networks() if prefix is None else None
+    for name, hip in host_ips.items():
         try:
-            if detect_network(hip, prefix) == cand_net:
+            if prefix is None:
+                net = nets.get(name) if nets else None
+                if net is None:
+                    net = IPv4Network(f"{hip}/24", strict=False)
+                if cand in net:
+                    return True
+            elif detect_network(hip, prefix) == detect_network(ip, prefix):
                 return True
         except Exception:
             continue
@@ -111,7 +179,9 @@ def _gateway_from_arp(host_ips: dict = None) -> str:
     （MAC 是真实单播）。route 被 OS 拦时用它：取「物理接口上、与本机同网段、
     MAC 非广播」的首条（跳过 Docker/VPN 虚拟接口的 ifscope 条目，如 bridge108
     上 74.125.250.129 那种；host_ips 拿不到时退化为只跳过虚拟接口）。"""
-    mac_re = re.compile(r"([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})")
+    # 每段 1~2 位十六进制（macOS `arp -a` 不打零填充：c4:6:83:71:74:4），
+    # 交由 norm_mac 逐段 zfill(2) 归一化；旧正则要求每段恰好 2 位，会把这类 MAC 漏成空串。
+    mac_re = re.compile(r"([0-9a-fA-F]{1,2}(?::[0-9a-fA-F]{1,2}){5})")
     try:
         out = subprocess.run(["arp", "-a"], capture_output=True, text=True, timeout=10).stdout
         for line in out.splitlines():
@@ -233,7 +303,9 @@ def arp_snapshot() -> list:
     # macOS:  ? (192.168.1.1) at aa:bb:cc:dd:ee:f on en0 ifscope [ethernet]
     #         192.168.1.1 at (incomplete) on en0
     # Linux : 192.168.1.1 at aa:bb:cc:dd:ee:ff [ether] on en0
-    mac_re = re.compile(r"([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})")
+    # 每段 1~2 位十六进制（macOS `arp -a` 不打零填充：c4:6:83:71:74:4），
+    # 交由 norm_mac 逐段 zfill(2) 归一化；旧正则要求每段恰好 2 位，会把这类 MAC 漏成空串。
+    mac_re = re.compile(r"([0-9a-fA-F]{1,2}(?::[0-9a-fA-F]{1,2}){5})")
     for line in out.splitlines():
         m_ip = re.search(r"\((\d+\.\d+\.\d+\.\d+)\)", line) or re.search(
             r"^\s*(\d+\.\d+\.\d+\.\d+)\s+at", line
@@ -295,30 +367,45 @@ def sweep_subnet(gw: str) -> list:
     return out
 
 
+def _merge_devices(devices: list, swn: list) -> list:
+    """把 sweep 命中并入 arp 设备：arp 没有的补进列表；arp 已有的若 sweep 探活成功则标 live。"""
+    have = {d["ip"] for d in devices}
+    for d in swn:
+        if d["ip"] not in have:
+            devices.append(d)
+    live_ips = {s["ip"] for s in swn if s.get("live")}
+    for d in devices:
+        if d["ip"] in live_ips:
+            d["live"] = True
+    return devices
+
+
+def _filter_noise(devices: list) -> list:
+    """过滤噪音条目（link-local / 广播 / 全 0 / 虚拟 bridge 接口 / .0 网络位）。
+
+    保留网关；并保留 sweep 主动探活确认在线的设备——这类设备只有 IP、没有 MAC/iface，
+    若套用 `is_noise` 的「空 MAC 即噪音」规则会被全部丢掉，使 LAN_SWEEP 形同虚设。
+    """
+    return [
+        d for d in devices
+        if d.get("gateway")
+        or (d.get("source") == "sweep" and d.get("live"))
+        or not is_noise(d.get("ip", ""), d.get("mac", ""), d.get("iface", ""))
+    ]
+
+
 def main():
     gw = detect_gateway()
     devices = arp_snapshot()
     sweep = SWEEP
     if sweep:
-        swn = sweep_subnet(gw)
-        have = {d["ip"] for d in devices}
-        for d in swn:
-            if d["ip"] not in have:
-                devices.append(d)
-        # sweep 命中的 IP，若 arp 里没有就补 live
-        for d in devices:
-            if any(s["ip"] == d["ip"] and s["live"] for s in swn):
-                d["live"] = True
+        _merge_devices(devices, sweep_subnet(gw))
     devices.sort(key=lambda d: ip_address(d["ip"]))
     # 网关本身标记
     for d in devices:
         if d["ip"] == gw:
             d["gateway"] = True
-    # 过滤噪音条目（link-local / 广播 / 全 0 / 虚拟 bridge 接口 / .0 网络位），但保留网关
-    devices = [
-        d for d in devices
-        if not (is_noise(d["ip"], d.get("mac", ""), d.get("iface", "")) and not d.get("gateway"))
-    ]
+    devices = _filter_noise(devices)
     scanned_at = int(time.time())
     payload = {
         "gateway": gw,

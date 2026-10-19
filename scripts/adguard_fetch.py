@@ -171,8 +171,11 @@ def build(entries: list, now: int) -> dict:
     topd = sorted(dom.items(),
                   key=lambda kv: (kv[1]["blocked"], kv[1]["count"]), reverse=True)
     return {
+        # 统一数据源状态契约(与 scan_lan/router_fetch 一致): reachable/fetched_at/stale/error。
         "reachable": True,
         "fetched_at": now,
+        "stale": False,
+        "error": "",
         "window_secs": WIN,
         "query_count": sum(c["total"] for c in clients.values()),
         "clients": clients,

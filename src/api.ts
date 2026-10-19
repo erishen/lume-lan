@@ -24,6 +24,12 @@ export interface DevicesPayload {
   devices: Device[];
   stale: boolean;
   note: string;
+  /** 统一数据源状态: 快照是否读到(缺文件=false)。 */
+  reachable?: boolean;
+  /** 快照生成时刻(unix)。 */
+  fetched_at?: number;
+  /** 失败原因(正常为空串)。 */
+  error?: string;
 }
 
 export interface Meta {
@@ -33,6 +39,8 @@ export interface Meta {
   sweep: boolean;
   scanned_at: number;
   available: boolean;
+  reachable?: boolean;
+  fetched_at?: number;
 }
 
 export interface RouterDevice {
@@ -145,6 +153,8 @@ export interface DnsPayload {
   /** AdGuard 可达(查询日志实时拉取成功); false 时 clients 可能是降级旧数据。 */
   reachable?: boolean;
   stale?: boolean;
+  /** 失败原因(正常为空串)。 */
+  error?: string;
   note?: string;
   fetched_at?: number;
   window_secs?: number;
@@ -171,6 +181,12 @@ export interface RouterPayload {
   login_stale?: boolean;
   login_stale_note?: string;
   fetched_at?: number;
+  /** 统一数据源状态: deviceinfo 免密身份层是否可达。 */
+  reachable?: boolean;
+  /** 本轮是否沿用上次终端数据(登录失败/冷却)。 */
+  stale?: boolean;
+  /** 登录/身份层失败原因(正常为空串)。 */
+  error?: string;
   router_devices?: RouterDevice[];
   router_count?: number;
   router_online?: number;

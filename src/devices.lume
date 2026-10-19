@@ -67,11 +67,11 @@ export func router_traffic_payload() {
 export func dns_payload() {
   let txt = read_file(dns_path);
   if (txt == null) {
-    return { available: false, reachable: false, note: "未启用 DNS 记录——起 AdGuard(make adguard-up)+ 配设备 DNS 后跑 make dns-fetch" };
+    return { available: false, reachable: false, error: "缺少 .data/dns.json", note: "未启用 DNS 记录——起 AdGuard(make adguard-up)+ 配设备 DNS 后跑 make dns-fetch" };
   }
   let r = try(() => json(txt));
   if (r.err != null || r.ok == null) {
-    return { available: false, reachable: false, note: "DNS 记录损坏——重跑 make dns-fetch" };
+    return { available: false, reachable: false, error: "dns.json 解析失败", note: "DNS 记录损坏——重跑 make dns-fetch" };
   }
   return {
     available: true,
@@ -83,6 +83,8 @@ export func dns_payload() {
     client_count: int(get(r.ok, "client_count", 0)),
     clients: get(r.ok, "clients", {}),
     top_domains: get(r.ok, "top_domains", []),
+    // 统一数据源状态契约: error 与 note 同源(失败原因), 保留 note 兼容既有前端。
+    error: get(r.ok, "error", ""),
     note: get(r.ok, "error", ""),
   };
 }
@@ -103,7 +105,11 @@ export func devices_payload() {
       count: 0,
       live_count: 0,
       devices: [],
+      // 统一数据源状态契约: reachable/fetched_at/stale/error(与 dns/router 一致)。
+      reachable: false,
+      fetched_at: 0,
       stale: false,
+      error: "缺少 .data/devices.json 快照",
       note: "暂无快照——先在宿主跑 make scan(或 python3 scripts/scan_lan.py)生成 .data/devices.json",
     };
   }
@@ -132,7 +138,11 @@ export func devices_payload() {
     count: len(devs),
     live_count: live,
     devices: devs,
+    // 统一数据源状态契约: reachable/fetched_at(快照生成时刻)/stale/error。
+    reachable: get(s, "reachable", true),
+    fetched_at: int(get(s, "fetched_at", get(s, "scanned_at", 0))),
     stale: stale,
+    error: get(s, "error", ""),
     note: note,
   };
 }
@@ -141,7 +151,8 @@ export func devices_payload() {
 export func meta_payload() {
   let s = load_snapshot();
   if (s == null) {
-    return { gateway: "", host_ip: "", subnet: "", sweep: false, scanned_at: 0, available: false };
+    return { gateway: "", host_ip: "", subnet: "", sweep: false, scanned_at: 0,
+             reachable: false, fetched_at: 0, available: false };
   }
   return {
     gateway: get(s, "gateway", ""),
@@ -149,6 +160,9 @@ export func meta_payload() {
     subnet: get(s, "subnet", ""),
     sweep: get(s, "sweep", false),
     scanned_at: int(get(s, "scanned_at", 0)),
+    // 统一数据源状态契约(vs dns/router): reachable/fetched_at。
+    reachable: get(s, "reachable", true),
+    fetched_at: int(get(s, "fetched_at", get(s, "scanned_at", 0))),
     available: true,
   };
 }
@@ -191,6 +205,11 @@ export func router_payload() {
     login_stale: login_stale,
     login_stale_note: login_stale_note,
     fetched_at: int(get(router, "fetched_at", 0)),
+    // 统一数据源状态契约(与 dns/devices 一致): reachable = deviceinfo 可达,
+    // stale = 沿用上次终端数据, error = 登录/身份层失败原因。
+    reachable: get(ro, "reachable", get(router, "ok", false)),
+    stale: get(ro, "stale", login_stale),
+    error: get(ro, "error", ""),
     router_devices: rdevs,
     router_count: len(rdevs),
     router_online: online_count,

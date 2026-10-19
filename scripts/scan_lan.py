@@ -319,12 +319,19 @@ def main():
         d for d in devices
         if not (is_noise(d["ip"], d.get("mac", ""), d.get("iface", "")) and not d.get("gateway"))
     ]
+    scanned_at = int(time.time())
     payload = {
         "gateway": gw,
         "host_ip": detect_host_ip(),
         "subnet": f"{detect_network(gw)}/24",
-        "scanned_at": int(time.time()),
+        "scanned_at": scanned_at,
         "sweep": sweep,
+        # —— 统一数据源状态契约(与 router_fetch/adguard_fetch 一致)——
+        # reachable/fetched_at/stale/error: 让前端对任一来源都能独立判「正常/降级/错误」。
+        "reachable": True,          # 宿主本地读 arp 表, 能写快照即可达
+        "fetched_at": scanned_at,
+        "stale": False,
+        "error": "",
         "devices": devices,
     }
     os.makedirs(os.path.dirname(OUT), exist_ok=True)

@@ -239,6 +239,7 @@ make dev              # stop + check + scan + router-fetch + esbuild watch + Lum
 
 - `make ui`            one-shot frontend build (esbuild → www/app.js, not watch)
 - `make check`         Lume --check lan.lume (DSL syntax)
+- `make test`          unit tests (stdlib unittest: ping args, host-IP fallback, traffic-history identity/migration)
 - `make stop`          stop the 8091 service + leftover esbuild watch + background refresh loop
 - After frontend changes → `make ui` → `make docker-redeploy` to ship into the container.
 

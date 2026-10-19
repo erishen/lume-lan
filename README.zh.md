@@ -203,6 +203,7 @@ make dev              # stop + check + scan + router-fetch + esbuild watch + Lum
 
 - `make ui`            一次性构建前端（esbuild → www/app.js，非 watch）
 - `make check`         Lume --check lan.lume（DSL 语法）
+- `make test`          单元测试（标准库 unittest：ping 参数 / host IP 回退 / 流量历史身份键与迁移）
 - `make stop`          停 8091 旧服务 + 残留 esbuild watch + 后台刷新循环
 - 前端改完 → `make ui` → `make docker-redeploy` 上到容器。
 

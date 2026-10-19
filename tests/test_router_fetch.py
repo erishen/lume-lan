@@ -70,6 +70,15 @@ class TestMigrateHist(HistCase):
         cur = {"mac:aa:aa:aa:aa:aa:aa": [{"ts": 1, "rx": 5, "tx": 0, "ip": "192.168.1.5"}]}
         self.assertEqual(R._migrate_hist(cur, []), cur)
 
+    def test_ambiguous_when_ip_reassigned_before_migration(self):
+        # 迁移的一次性歧义(已在文章标注): 旧格式只有一个 IP 键; 若该 IP 在迁移前
+        # 已被新设备(mac:cc)占用, 旧历史会按迁移时的 IP→MAC 映射归到 cc 名下
+        # (旧数据无 MAC, 无法可靠还原)。固定该行为, 防止误以为能精确还原。
+        old = {"192.168.1.5": [{"ts": 1, "rx": 111, "tx": 0}]}
+        out = R._migrate_hist(old, [dev("192.168.1.5", "cc:cc:cc:cc:cc:cc")])
+        self.assertEqual(list(out.keys()), ["mac:cc:cc:cc:cc:cc:cc"])
+        self.assertEqual(out["mac:cc:cc:cc:cc:cc:cc"][0]["rx"], 111)
+
 
 class TestTrafficDeltas(HistCase):
     def test_delta_1h_over_baseline(self):

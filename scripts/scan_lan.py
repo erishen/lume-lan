@@ -6,7 +6,7 @@ lume-core 没有 exec/子进程内置，所以「取设备」的真实系统调�
 
 两种模式（env 控制）：
   - 默认：解析 `arp -a` 现成表（秒级，只反映「已连接/近期通信过的」设备）。
-  - LAN_SWEEP=1：在网关所在 /24 网段做 ping sweep（`ping -c 1 -t 1`，并发），
+  - LAN_SWEEP=1：在网关所在 /24 网段做 ping sweep（平台感知的 ping 参数，并发），
     能捞出「在线但 arp 表里还没」的设备；较慢（默认 253 个 IP，约 10~30s）。
 
 输出（.data/devices.json）：
@@ -22,6 +22,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 import concurrent.futures
 from ipaddress import ip_address
@@ -168,13 +169,47 @@ def detect_gateway() -> str:
 
 
 def detect_host_ip() -> str:
-    """本机在局域网里的 IP（默认路由出口接口）。配 AdGuard DNS「首选」要指向它。
+    """本机在局域网里的 IP。配 AdGuard DNS「首选」要指向它。
 
-    顺序：route get default 的 interface（macOS）→ ifconfig 取该口 inet
-    → /sys/class/net 逐口取（Linux）→ 兜底 127.0.0.1。
+    优先取「默认路由出口」上的地址，但要排除 VPN/隧道/虚拟接口——VPN 或多网卡
+    接管默认路由时，出口可能是 utun 之类，其地址不是家庭 LAN 的物理地址（把 DNS
+    指向它会不可达）。顺序：
+
+    1. `route get default` 的 interface 若为物理接口 → 用 ifconfig 取该口 IPv4；
+    2. 否则退回「与本机可信网关同网段」的物理接口 IPv4（复用 detect_gateway 的
+       虚拟接口/同网段校验）；
+    3. 仍拿不到再退到 UDP socket 连外网取源 IP（可能是隧道地址，仅作兜底）；
+    4. 兜底 127.0.0.1。
     """
     import socket
-    # 兜底：连外网时本机会用到的源 IP（不真发包，socket 分配不触发网络）
+
+    host_ips = _host_ipv4s()
+
+    # 1) 默认路由出口接口（非虚拟）上的地址
+    try:
+        out = subprocess.run(
+            ["route", "get", "default"], capture_output=True, text=True, timeout=5
+        ).stdout
+        m_if = re.search(r"interface:\s*(\S+)", out)
+        iface = m_if.group(1) if m_if else ""
+        if iface and not _is_virtual_iface(iface) and host_ips.get(iface):
+            return host_ips[iface]
+    except Exception:
+        pass
+
+    # 2) 与本机可信网关同网段的物理接口地址（VPN 接管默认路由时命中这里）
+    try:
+        gw = detect_gateway()
+        if gw:
+            for iface, ip in host_ips.items():
+                if _is_virtual_iface(iface):
+                    continue
+                if _same_lan(gw, {iface: ip}):
+                    return ip
+    except Exception:
+        pass
+
+    # 3) 兜底：连外网时本机会用到的源 IP（不真发包，socket 分配不触发网络）
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(0.5)
@@ -219,11 +254,23 @@ def arp_snapshot() -> list:
     return list(devices.values())
 
 
+def _ping_args() -> list:
+    """按平台构造 ping 探活参数——同名选项在 macOS 与 Linux 上语义不同，
+    写死 `-c 1 -t 1 -W 1` 会踩坑：
+
+    - macOS/BSD：`-t 1`（秒，总超时） + `-W 1000`（毫秒，等待应答）
+    - Linux/其他：`-W 1`（秒）；不传 `-t`（Linux 的 `-t` 是 TTL，含义不同）
+    """
+    if sys.platform == "darwin" or sys.platform.startswith(("freebsd", "openbsd", "netbsd")):
+        return ["-c", "1", "-t", "1", "-W", "1000"]
+    return ["-c", "1", "-W", "1"]
+
+
 def ping_one(ip: str) -> dict:
-    """单个 IP 探活：ping -c 1 -t 1（macOS/Linux 通吃），1.5s 硬超时。"""
+    """单个 IP 探活：按平台 ping 一次，1.5s 硬超时。"""
     try:
         r = subprocess.run(
-            ["ping", "-c", "1", "-t", "1", "-W", "1", ip],
+            ["ping", *_ping_args(), ip],
             capture_output=True, timeout=1.5,
         )
         live = r.returncode == 0

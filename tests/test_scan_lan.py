@@ -49,20 +49,20 @@ class TestPingArgs(unittest.TestCase):
 
 class TestHostIp(unittest.TestCase):
     def test_prefers_physical_default_route_iface(self):
-        ifaces = {"en0": "192.168.3.57", "utun3": "10.8.0.2"}
-        route = "   interface: en0\n   gateway: 192.168.3.1\n"
+        ifaces = {"en0": "192.168.1.57", "utun3": "10.8.0.2"}
+        route = "   interface: en0\n   gateway: 192.168.1.1\n"
         with mock.patch.object(S, "_host_ipv4s", lambda: ifaces), \
              mock.patch.object(S.subprocess, "run", _run_stdout(route)):
-            self.assertEqual(S.detect_host_ip(), "192.168.3.57")
+            self.assertEqual(S.detect_host_ip(), "192.168.1.57")
 
     def test_vpn_default_route_falls_back_to_gateway_subnet(self):
         # 默认出口是 VPN(utun) → 跳过, 退回与本机可信网关同网段的物理接口
-        ifaces = {"utun3": "10.8.0.2", "en0": "192.168.3.57"}
+        ifaces = {"utun3": "10.8.0.2", "en0": "192.168.1.57"}
         route = "   interface: utun3\n"
         with mock.patch.object(S, "_host_ipv4s", lambda: ifaces), \
-             mock.patch.object(S, "detect_gateway", lambda: "192.168.3.1"), \
+             mock.patch.object(S, "detect_gateway", lambda: "192.168.1.1"), \
              mock.patch.object(S.subprocess, "run", _run_stdout(route)):
-            self.assertEqual(S.detect_host_ip(), "192.168.3.57")
+            self.assertEqual(S.detect_host_ip(), "192.168.1.57")
 
     def test_loopback_when_nothing_available(self):
         with mock.patch.object(S, "_host_ipv4s", lambda: {}), \
@@ -88,9 +88,9 @@ class TestNetmask(unittest.TestCase):
 
 class TestArpParsing(unittest.TestCase):
     ARP = (
-        "? (192.168.3.1) at c4:6:83:71:74:4 on en0 ifscope [ethernet]\n"
-        "? (192.168.3.36) at 84:9d:c2:72:7a:69 on en0 ifscope [ethernet]\n"
-        "? (192.168.3.2) at (incomplete) on en0 ifscope [ethernet]\n"
+        "? (192.168.1.1) at aa:bb:cc:dd:ee:f on en0 ifscope [ethernet]\n"
+        "? (192.168.1.36) at 11:22:33:44:55:66 on en0 ifscope [ethernet]\n"
+        "? (192.168.1.2) at (incomplete) on en0 ifscope [ethernet]\n"
     )
 
     def test_snapshot_parses_non_zero_padded_mac(self):
@@ -98,21 +98,21 @@ class TestArpParsing(unittest.TestCase):
         # 进而被 is_noise「空 MAC 即噪音」丢弃。
         with mock.patch.object(S.subprocess, "run", _run_stdout(self.ARP)):
             dev = {d["ip"]: d for d in S.arp_snapshot()}
-        self.assertEqual(dev["192.168.3.1"]["mac"], "c4:06:83:71:74:04")
-        self.assertEqual(dev["192.168.3.36"]["mac"], "84:9d:c2:72:7a:69")
-        self.assertEqual(dev["192.168.3.2"]["mac"], "")
-        self.assertFalse(dev["192.168.3.2"]["live"])
+        self.assertEqual(dev["192.168.1.1"]["mac"], "aa:bb:cc:dd:ee:0f")
+        self.assertEqual(dev["192.168.1.36"]["mac"], "11:22:33:44:55:66")
+        self.assertEqual(dev["192.168.1.2"]["mac"], "")
+        self.assertFalse(dev["192.168.1.2"]["live"])
 
     def test_gateway_from_arp_matches_non_padded_mac(self):
-        arp = "? (192.168.3.1) at c4:6:83:71:74:4 on en0 ifscope [ethernet]\n"
+        arp = "? (192.168.1.1) at aa:bb:cc:dd:ee:f on en0 ifscope [ethernet]\n"
         with mock.patch.object(S.subprocess, "run", _run_stdout(arp)):
-            self.assertEqual(S._gateway_from_arp({"en0": "192.168.3.57"}), "192.168.3.1")
+            self.assertEqual(S._gateway_from_arp({"en0": "192.168.1.57"}), "192.168.1.1")
 
 
 class TestHostIfaceNetworks(unittest.TestCase):
     MACOS = (
         "en0: flags=8863<UP,BROADCAST,RUNNING,MULTICAST> mtu 1500\n"
-        "\tinet 192.168.3.57 netmask 0xffffff00 broadcast 192.168.3.255\n"
+        "\tinet 192.168.1.57 netmask 0xffffff00 broadcast 192.168.1.255\n"
         "utun3: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1380\n"
         "\tinet 10.8.0.2 --> 10.8.0.2 netmask 0xffffffff\n"
     )
@@ -126,7 +126,7 @@ class TestHostIfaceNetworks(unittest.TestCase):
     def test_parses_macos_hex_netmask(self):
         with mock.patch.object(S.subprocess, "run", _run_stdout(self.MACOS)):
             nets = S._host_iface_networks()
-        self.assertEqual(str(nets["en0"]), "192.168.3.0/24")
+        self.assertEqual(str(nets["en0"]), "192.168.1.0/24")
         self.assertEqual(str(nets["utun3"]), "10.8.0.2/32")
 
     def test_parses_linux_dotted_and_cidr(self):
@@ -137,18 +137,18 @@ class TestHostIfaceNetworks(unittest.TestCase):
 
 
 class TestSameLan(unittest.TestCase):
-    HOSTS = {"en0": "192.168.3.57"}
+    HOSTS = {"en0": "192.168.1.57"}
 
     def _nets(self):
         return mock.patch.object(S, "_host_iface_networks",
-                                 lambda: {"en0": IPv4Network("192.168.3.0/24")})
+                                 lambda: {"en0": IPv4Network("192.168.1.0/24")})
 
     def test_accepts_same_subnet_by_real_mask(self):
         with self._nets():
-            self.assertTrue(S._same_lan("192.168.3.1", self.HOSTS))
+            self.assertTrue(S._same_lan("192.168.1.1", self.HOSTS))
 
     def test_rejects_adjacent_subnet_that_loose_16_would_accept(self):
-        # 真实掩码 /24: 192.168.5.1 与 192.168.3.57 不同子网 → 拒绝(旧固定 /16 会误判为同网)
+        # 真实掩码 /24: 192.168.5.1 与 192.168.1.57 不同子网 → 拒绝(旧固定 /16 会误判为同网)
         with self._nets():
             self.assertFalse(S._same_lan("192.168.5.1", self.HOSTS))
 
@@ -166,35 +166,35 @@ class TestIsNoise(unittest.TestCase):
             self.assertTrue(S.is_noise(ip, "01:00:5e:7f:ff:fa", "en0"))
 
     def test_real_device_is_kept(self):
-        self.assertFalse(S.is_noise("192.168.3.36", "84:9d:c2:72:7a:69", "en0"))
+        self.assertFalse(S.is_noise("192.168.1.36", "11:22:33:44:55:66", "en0"))
 
     def test_empty_mac_is_noise(self):
-        self.assertTrue(S.is_noise("192.168.3.99", "", ""))
+        self.assertTrue(S.is_noise("192.168.1.99", "", ""))
 
 
 class TestSweepMergeAndNoise(unittest.TestCase):
     def test_sweep_only_live_device_survives_noise_filter(self):
         # 回归: sweep 命中设备只有 IP、无 MAC, is_noise 会判为噪音; 必须保留否则 LAN_SWEEP 失效
         devices = [
-            {"ip": "192.168.3.1", "mac": "aa:aa:aa:aa:aa:aa", "iface": "en0",
+            {"ip": "192.168.1.1", "mac": "aa:aa:aa:aa:aa:aa", "iface": "en0",
              "live": True, "source": "arp", "gateway": True},
-            {"ip": "192.168.3.74", "mac": "", "iface": "", "live": True, "source": "sweep"},
+            {"ip": "192.168.1.74", "mac": "", "iface": "", "live": True, "source": "sweep"},
         ]
         self.assertEqual([d["ip"] for d in S._filter_noise(devices)],
-                         ["192.168.3.1", "192.168.3.74"])
+                         ["192.168.1.1", "192.168.1.74"])
 
     def test_incomplete_arp_without_mac_is_still_noise(self):
-        devices = [{"ip": "192.168.3.99", "mac": "", "iface": "", "live": False, "source": "arp"}]
+        devices = [{"ip": "192.168.1.99", "mac": "", "iface": "", "live": False, "source": "arp"}]
         self.assertEqual(S._filter_noise(devices), [])
 
     def test_merge_adds_new_sweep_host_and_flags_arp_live(self):
-        devices = [{"ip": "192.168.3.1", "mac": "aa:aa:aa:aa:aa:aa",
+        devices = [{"ip": "192.168.1.1", "mac": "aa:aa:aa:aa:aa:aa",
                     "iface": "en0", "live": False, "source": "arp"}]
-        swn = [{"ip": "192.168.3.1", "live": True, "source": "sweep"},
-               {"ip": "192.168.3.74", "live": True, "source": "sweep"}]
+        swn = [{"ip": "192.168.1.1", "live": True, "source": "sweep"},
+               {"ip": "192.168.1.74", "live": True, "source": "sweep"}]
         out = S._merge_devices(devices, swn)
-        self.assertEqual(sorted(d["ip"] for d in out), ["192.168.3.1", "192.168.3.74"])
-        self.assertTrue(next(d for d in out if d["ip"] == "192.168.3.1")["live"])
+        self.assertEqual(sorted(d["ip"] for d in out), ["192.168.1.1", "192.168.1.74"])
+        self.assertTrue(next(d for d in out if d["ip"] == "192.168.1.1")["live"])
 
 
 if __name__ == "__main__":

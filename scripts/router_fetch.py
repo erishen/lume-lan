@@ -64,6 +64,30 @@ def load_env() -> dict:
     return vals
 
 
+DEVICES_SNAP = os.path.join(ROOT, ".data", "devices.json")
+
+
+def resolve_router_host(env: dict, default: str = "") -> str:
+    """解析路由器地址, 优先级(避免网段写死后连不到真实网关):
+
+    1. `.env` 的 ROUTER_HOST / 进程环境变量 —— 显式配置最高优先级;
+    2. `.data/devices.json` 的 gateway —— 宿主 arp 扫出来的**真实**网关
+       (家用场景路由器就是网关, 换网段/换路由零配置);
+    3. 传入的 default(scan_lan/galaxy 都没拿到时才用, 调用方可传空串)。
+
+    返回不带 scheme 的主机名/IP; 调用方自行补 `http://`。
+    """
+    host = (env.get("ROUTER_HOST") or "").strip()
+    if host:
+        return host
+    try:
+        with open(DEVICES_SNAP, encoding="utf-8") as f:
+            gw = str((json.load(f) or {}).get("gateway") or "").strip()
+    except (OSError, ValueError):
+        gw = ""
+    return gw or default
+
+
 class CatSession:
     """带会话 cookie 的 CAT 客户端。cookie 用 dict(同名覆盖, 保留最新登录态);
     每次请求带 _ResponseFormat:JSON, 否则未登录态 /api/* 被 404 隐藏。"""
@@ -687,7 +711,10 @@ def check_alerts(devices: list, wan: dict, fetched_at: int) -> list:
 
 def main():
     env = load_env()
-    host = (env.get("ROUTER_HOST") or "192.168.1.1")
+    host = resolve_router_host(env)
+    if not host:
+        print("✗ 拿不到路由器地址: 请在 .env 填 ROUTER_HOST, 或先跑 make scan 生成 .data/devices.json(自动取网关)")
+        return 2
     if not host.startswith("http"):
         host = "http://" + host
     user = env.get("ROUTER_USER") or "admin"
@@ -854,4 +881,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)

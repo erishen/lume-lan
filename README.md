@@ -240,6 +240,10 @@ make dev              # stop + check + scan + router-fetch + esbuild watch + Lum
 - `make ui`            one-shot frontend build (esbuild → www/app.js, not watch)
 - `make check`         Lume --check lan.lume (DSL syntax)
 - `make test`          unit tests (stdlib unittest: ping args, host-IP fallback, traffic-history identity/migration)
+- `make privacy`       privacy check: tracked files must not contain real LAN identifiers
+                      (private subnets / public IPs / MACs outside the example allow-list;
+                      add `LOCAL=1` to also diff against this host's `.data/` snapshot)
+- `make hooks`         install a pre-commit hook that runs `privacy --staged`
 - `make stop`          stop the 8091 service + leftover esbuild watch + background refresh loop
 - After frontend changes → `make ui` → `make docker-redeploy` to ship into the container.
 
@@ -249,7 +253,7 @@ make dev              # stop + check + scan + router-fetch + esbuild watch + Lum
 
 | Variable | Purpose |
 |---|---|
-| `ROUTER_HOST` / `ROUTER_USER` / `ROUTER_PASS` | router admin address and credentials |
+| `ROUTER_HOST` / `ROUTER_USER` / `ROUTER_PASS` | router admin address and credentials. `ROUTER_HOST` may be left empty: the scripts then use the `gateway` from `.data/devices.json` (the real gateway found by the host arp scan), so no subnet is hard-coded |
 | `LAN_SWEEP=1` | add a ping sweep on top of arp (catches online-but-not-in-arp devices; slower) |
 | `LAN_ANOMALY_GB=10` | anomaly traffic alert threshold (last-1h delta ≥ this value gets called out) |
 | `WEBHOOK_URL` / `WEBHOOK_SECRET` | alert push webhook (unset → log only) |
@@ -265,6 +269,16 @@ make dev              # stop + check + scan + router-fetch + esbuild watch + Lum
 - Router credentials `ROUTER_PASS` live in `.env` (gitignored). If the container binds
   only 127.0.0.1 (`LUME_BIND`), only localhost can reach it; before exposing to the
   LAN/internet, enable Basic Auth first.
+- **This repository is public**, so code, tests and docs must never contain real
+  household network identifiers (LAN subnet, host IP, gateway/device MACs, device
+  names, router serial). Use the reserved example values instead
+  (`192.168.1.x`, `aa:bb:cc:dd:ee:ff`). Run `make privacy` before pushing, or install
+  the guard with `make hooks` so `git commit` refuses leaked identifiers in the
+  staged diff.
+
+## License
+
+[MIT](LICENSE) © 2026 Erishen
 
 ## Limitations
 

@@ -20,7 +20,7 @@
 #
 # 凭据/端口: compose 自动读当前目录 .env 做变量替换(ROUTER_PASS/WEBHOOK_URL 等不进镜像)。
 #
-# 网络: Mac 的 Docker Desktop 默认 NAT 通常能直达 192.168.1.1(你的路由器)。
+# 网络: Mac 的 Docker Desktop 默认 NAT 通常能直达宿主的局域网网段。
 #       若连不通, 改用 Linux host 网络: 在 services.lume-lan 加
 #       network_mode: host(并去掉 ports), 且 REFRESH=1。
 
@@ -45,9 +45,10 @@ services:
       REFRESH_SECS: "60"
       # 路由器 / 告警推送凭据: 仅在 REFRESH=1 时容器才需要, 默认只 serve 模式不注入,
       # 避免凭据进入容器环境(容器被攻破也拿不到路由器密码/webhook 密钥)。
-      # 需要容器内自刷新时再打开:
-      # ROUTER_HOST: "192.168.1.1"
-      # ROUTER_USER: "admin"
+      # 需要容器内自刷新时再打开(ROUTER_HOST 留空则由脚本从 .data/devices.json
+      # 的 gateway 推导; 想锁定就在 .env 里配, compose 会做变量替换):
+      # ROUTER_HOST: "${ROUTER_HOST:-}"
+      # ROUTER_USER: "${ROUTER_USER:-admin}"
       # ROUTER_PASS: "${ROUTER_PASS:-}"
       # WEBHOOK_URL: "${WEBHOOK_URL:-}"
       # WEBHOOK_SECRET: "${WEBHOOK_SECRET:-}"

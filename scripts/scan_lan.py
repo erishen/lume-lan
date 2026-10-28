@@ -179,7 +179,7 @@ def _gateway_from_arp(host_ips: dict = None) -> str:
     （MAC 是真实单播）。route 被 OS 拦时用它：取「物理接口上、与本机同网段、
     MAC 非广播」的首条（跳过 Docker/VPN 虚拟接口的 ifscope 条目，如 bridge108
     上 74.125.250.129 那种；host_ips 拿不到时退化为只跳过虚拟接口）。"""
-    # 每段 1~2 位十六进制（macOS `arp -a` 不打零填充：c4:6:83:71:74:4），
+    # 每段 1~2 位十六进制（macOS `arp -a` 不打零填充：aa:bb:cc:dd:ee:f），
     # 交由 norm_mac 逐段 zfill(2) 归一化；旧正则要求每段恰好 2 位，会把这类 MAC 漏成空串。
     mac_re = re.compile(r"([0-9a-fA-F]{1,2}(?::[0-9a-fA-F]{1,2}){5})")
     try:
@@ -303,7 +303,7 @@ def arp_snapshot() -> list:
     # macOS:  ? (192.168.1.1) at aa:bb:cc:dd:ee:f on en0 ifscope [ethernet]
     #         192.168.1.1 at (incomplete) on en0
     # Linux : 192.168.1.1 at aa:bb:cc:dd:ee:ff [ether] on en0
-    # 每段 1~2 位十六进制（macOS `arp -a` 不打零填充：c4:6:83:71:74:4），
+    # 每段 1~2 位十六进制（macOS `arp -a` 不打零填充：aa:bb:cc:dd:ee:f），
     # 交由 norm_mac 逐段 zfill(2) 归一化；旧正则要求每段恰好 2 位，会把这类 MAC 漏成空串。
     mac_re = re.compile(r"([0-9a-fA-F]{1,2}(?::[0-9a-fA-F]{1,2}){5})")
     for line in out.splitlines():

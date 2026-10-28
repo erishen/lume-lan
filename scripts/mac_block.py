@@ -102,7 +102,10 @@ def _gateway_mac() -> str:
 
 def cmd(action: str, target: str, reason: str, force: bool, dry: bool):
     env = rf.load_env()
-    host = env.get("ROUTER_HOST", "192.168.1.1")
+    host = rf.resolve_router_host(env)
+    if not host:
+        print("✗ 拿不到路由器地址: 请在 .env 填 ROUTER_HOST, 或先跑 make scan 生成 .data/devices.json(自动取网关)")
+        sys.exit(2)
     if not host.startswith("http"):
         host = "http://" + host
     sess = rf.CatSession(host)

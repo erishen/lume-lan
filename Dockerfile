@@ -9,7 +9,7 @@
 #   docker buildx build --platform linux/arm64,linux/amd64 -t lume-lan .
 #   或本地单架构: docker build -t lume-lan . (自动按本机 arch 取对应二进制)
 
-ARG LUME_VERSION=v0.6.3
+ARG LUME_VERSION=v0.11.0
 ARG LUME_REPO=erishen/lume
 FROM python:3.12-slim AS base
 
@@ -23,7 +23,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     REFRESH=0 \
     REFRESH_SECS=60 \
     # 路由器后台地址(Mac Docker Desktop 走默认 NAT 通常直达局域网; Linux 建议 network_mode: host)
-    ROUTER_HOST=192.168.1.1
+    # 留空 = 由 router_fetch.py 从 .data/devices.json 的 gateway 推导, 不写死网段。
+    ROUTER_HOST=
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
@@ -60,6 +61,15 @@ RUN set -eux; \
       install -m 0755 "${bin}" /usr/local/bin/lume; \
       rm -rf /opt/lume; \
     }; \
+    # vendor/ 由 make docker-fetch 生成, 带 .lume-version 版本戳; 与本次 build 指定的
+    # LUME_VERSION 不一致就直接失败 —— 否则会静默用旧二进制打镜像(版本漂移)。
+    if [ -f /vendor-src/.lume-version ]; then \
+      stamp=$(head -n1 /vendor-src/.lume-version | tr -d '[:space:]'); \
+      if [ "${stamp}" != "${LUME_VERSION}" ]; then \
+        echo "vendor/ 是 ${stamp}, 但 LUME_VERSION=${LUME_VERSION} → 先跑 make docker-fetch LUME_VERSION=${LUME_VERSION}" >&2; \
+        exit 1; \
+      fi; \
+    fi; \
     src="/vendor-src/lume-linux-${arch}-static.tar.gz"; \
     sha="/vendor-src/lume-linux-${arch}-static.sha"; \
     if [ -f "${src}" ]; then \

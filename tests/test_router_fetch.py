@@ -134,5 +134,46 @@ class TestPayload(HistCase):
         self.assertEqual(self.read_payload()["series"]["192.168.1.7"][-1]["rx"], 7)
 
 
+class TestRouterHost(unittest.TestCase):
+    """ROUTER_HOST 解析优先级: .env 显式 > devices.json 网关 > 调用方 default。
+
+    背景: 以前默认值写死 192.168.1.1, 换到别的网段(如 10.0.0.0/24)就连不上路由器。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self._orig = R.DEVICES_SNAP
+        R.DEVICES_SNAP = os.path.join(self.tmp.name, "devices.json")
+
+    def tearDown(self):
+        R.DEVICES_SNAP = self._orig
+        self.tmp.cleanup()
+
+    def write_snap(self, obj):
+        with open(R.DEVICES_SNAP, "w", encoding="utf-8") as f:
+            json.dump(obj, f)
+
+    def test_env_wins_over_snapshot(self):
+        self.write_snap({"gateway": "10.0.0.1"})
+        self.assertEqual(R.resolve_router_host({"ROUTER_HOST": "10.0.0.1"}), "10.0.0.1")
+
+    def test_blank_env_falls_through_to_gateway(self):
+        self.write_snap({"gateway": "10.0.0.1"})
+        self.assertEqual(R.resolve_router_host({"ROUTER_HOST": "  "}), "10.0.0.1")
+
+    def test_no_env_uses_gateway(self):
+        self.write_snap({"gateway": "10.0.0.1"})
+        self.assertEqual(R.resolve_router_host({}), "10.0.0.1")
+
+    def test_missing_snapshot_uses_default(self):
+        self.assertEqual(R.resolve_router_host({}, default="10.1.1.1"), "10.1.1.1")
+        self.assertEqual(R.resolve_router_host({}), "")   # 无 default → 空, 由调用方显式报错
+
+    def test_corrupt_snapshot_is_tolerated(self):
+        with open(R.DEVICES_SNAP, "w", encoding="utf-8") as f:
+            f.write("{not json")
+        self.assertEqual(R.resolve_router_host({}, default="10.1.1.1"), "10.1.1.1")
+
+
 if __name__ == "__main__":
     unittest.main()

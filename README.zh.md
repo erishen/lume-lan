@@ -204,6 +204,9 @@ make dev              # stop + check + scan + router-fetch + esbuild watch + Lum
 - `make ui`            一次性构建前端（esbuild → www/app.js，非 watch）
 - `make check`         Lume --check lan.lume（DSL 语法）
 - `make test`          单元测试（标准库 unittest：ping 参数 / host IP 回退 / 流量历史身份键与迁移）
+- `make privacy`       隐私检查：已跟踪文件不得含真实局域网标识（私有网段 / 公网 IP / 白名单外的 MAC；
+                      加 `LOCAL=1` 再比对本机 `.data/` 快照）
+- `make hooks`         安装 pre-commit 钩子，提交前自动跑 `privacy --staged`
 - `make stop`          停 8091 旧服务 + 残留 esbuild watch + 后台刷新循环
 - 前端改完 → `make ui` → `make docker-redeploy` 上到容器。
 
@@ -213,7 +216,7 @@ make dev              # stop + check + scan + router-fetch + esbuild watch + Lum
 
 | 变量 | 用途 |
 |---|---|
-| `ROUTER_HOST` / `ROUTER_USER` / `ROUTER_PASS` | 路由器后台地址与登录凭据 |
+| `ROUTER_HOST` / `ROUTER_USER` / `ROUTER_PASS` | 路由器后台地址与登录凭据。`ROUTER_HOST` 可留空——留空时脚本自动取 `.data/devices.json` 里的 `gateway`（宿主 arp 扫出的真实网关），不写死网段 |
 | `LAN_SWEEP=1` | arp 之外加 ping sweep（捞出在线但 arp 表没的设备，较慢） |
 | `LAN_ANOMALY_GB=10` | 异常流量告警阈值（近 1h 增量 ≥ 该值点名） |
 | `WEBHOOK_URL` / `WEBHOOK_SECRET` | 告警推送 webhook（不配则只打印日志） |
@@ -226,6 +229,14 @@ make dev              # stop + check + scan + router-fetch + esbuild watch + Lum
 - 快照（`.data/`）是内网 IP/MAC，属隐私数据，已 gitignore，勿提交。
 - 路由器凭据 `ROUTER_PASS` 放 `.env`（gitignore，不进仓）。容器若只 bind 127.0.0.1
   （`LUME_BIND`），仅本机可访问；开放到局域网/公网前务必先开 Basic Auth。
+- **本仓库是公开仓库**：代码、测试、文档里都不得出现真实的家庭网络标识
+  （内网网段、本机 IP、网关/设备 MAC、设备名、路由器 SN）。请统一用保留示例值
+  （`192.168.1.x`、`aa:bb:cc:dd:ee:ff`）。推送前跑 `make privacy`，或用 `make hooks`
+  装钩子——`git commit` 会拒绝暂存区里的泄漏标识。
+
+## 许可证
+
+[MIT](LICENSE) © 2026 Erishen
 
 ## 限制
 

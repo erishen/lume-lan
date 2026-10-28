@@ -35,10 +35,12 @@ DOCKER_PORT ?= 10091
 ADGUARD_PORT ?= 10095
 # 镜像名 / Lume 版本(与 Dockerfile 的 ARG 一致)。
 DOCKER_IMAGE ?= lume-lan
-LUME_VERSION ?= v0.6.3
+LUME_VERSION ?= v0.11.0
 LUME_REPO    ?= erishen/lume
-# 路由器地址默认值(docker 目标注入容器; 覆盖: make docker-run ROUTER_HOST=...)。
-ROUTER_HOST  ?= 192.168.1.1
+# 路由器地址(容器目标注入容器用)。**不写死网段**: 空 = 让脚本自己从
+# .data/devices.json 的 gateway 推导(宿主 arp 扫出来的真实网关);
+# 显式覆盖: make docker-run ROUTER_HOST=192.168.1.1(或 .env 里配)。
+ROUTER_HOST  ?=
 PY        ?= /usr/bin/python3
 
 ESBUILD   := $(shell command -v esbuild 2>/dev/null || echo ../lume/frontend/node_modules/.bin/esbuild)
@@ -162,6 +164,17 @@ check:
 test:
 	@$(PY) -m unittest discover -s tests -v
 
+# 隐私检查(仓库公开): 已跟踪文件里不得出现真实局域网标识。
+# 硬规则扫私有网段/公网 IP/MAC(示例值白名单放行); 加 LOCAL=1 再比对本机 .data/ 实况。
+privacy:
+	@$(PY) scripts/check_privacy.py $(if $(LOCAL),--local,)
+
+# 安装 git 钩子: 提交前自动跑 privacy --staged(只查本次暂存的改动)。
+hooks:
+	@printf '#!/bin/sh\ncd "$$(git rev-parse --show-toplevel)" || exit 1\nexec %s scripts/check_privacy.py --staged\n' "$(PY)" > .git/hooks/pre-commit
+	@chmod +x .git/hooks/pre-commit
+	@echo "✓ 已安装 .git/hooks/pre-commit(提交前跑 privacy --staged)"
+
 # 入口 bundle 落 www/app.js(单入口;当前无共享 chunk)。
 ui:
 	@$(ESBUILD) src/lan/app.tsx --bundle --minify --format=esm --jsx=automatic --outdir=www --outbase=src/lan
@@ -248,7 +261,7 @@ docker-redeploy: scan router-fetch ui docker-build
 	@$(MAKE) docker-up
 	@echo "✅ 重新部署完成 → http://127.0.0.1:$(DOCKER_PORT)/  (宿主侧硬刷新 Cmd+Shift+R)"
 
-# compose 方式(主 compose 现在含 lume-lan + adguard 两个服务, 等价于 make docker-up)。
+# compose 方式(主 compose 只含 lume-lan 看板; AdGuard 已迁宿主 launchd)。
 # 端口经 env 传入(DOCKER_PORT + ADGUARD_PORT; compose 自动读 .env 做默认值替换)。
 docker-compose:
 	@DOCKER_PORT=$(DOCKER_PORT) ADGUARD_PORT=$(ADGUARD_PORT) docker compose up -d
@@ -256,7 +269,7 @@ docker-compose:
 docker-compose-down:
 	@docker compose down
 
-.PHONY: default dev lan lan-dev stop scan scan-sweep check ui watch router-fetch notify-test daily-digest \
+.PHONY: default dev lan lan-dev stop scan scan-sweep check test privacy hooks ui watch router-fetch notify-test daily-digest \
          adguard-up adguard-down adguard-log dns-fetch dns-watch \
          block block-list unblock \
          docker-fetch docker-build docker-build-multiarch docker-run docker-up docker-down docker-redeploy docker-compose docker-compose-down

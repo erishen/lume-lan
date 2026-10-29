@@ -133,6 +133,25 @@ adguard-log:
 dns-fetch:
 	@$(PY) scripts/adguard_fetch.py
 
+# ---- 可互访的 lume peer 节点(前端「应用互访」Tab)----
+# 探测为什么在宿主跑: 看板容器在 Docker NAT 网段, 连不到宿主 loopback 上的
+# peer 端口; PEER_SHARED 也不该进容器环境。与 scan_lan.py 同一套分工。
+# .env 配: PEER_SHARED(与对端一致) + PEER_TARGETS="127.0.0.1:18152,192.168.1.20:18088"
+peers-fetch:
+	@$(PY) scripts/peers_fetch.py
+
+# ---- A2A 长任务 worker ----
+# lume 没有 spawn/exec, http_* 也是同步阻塞 —— 「提交后立刻返回、后台慢慢跑」
+# 这件事在纯 lume 里做不到, 必须由这个宿主进程把任务从 submitted 推到完成。
+#   make a2a-worker        常驻(每 2s 扫一轮)
+#   make a2a-worker-once   只跑一轮(调试 / CI)
+a2a-worker:
+	@echo "▶ A2A worker 常驻(扫 .data/a2a-tasks, 每 2s 一轮)"
+	@$(PY) scripts/a2a_worker.py
+
+a2a-worker-once:
+	@$(PY) scripts/a2a_worker.py --once
+
 # 实时监听 AdGuard 新客户端(定位「设备 DNS 走没走 AdGuard」):
 # 跑着它, 然后在某台设备(如一台手机)上随便刷个网页, 终端立刻显示那台设备的 IP 进来没。
 # 宿主 AdGuard 下: 192.168.1.x = 真实局域网设备(示例);
@@ -169,6 +188,19 @@ test:
 privacy:
 	@$(PY) scripts/check_privacy.py $(if $(LOCAL),--local,)
 
+# ---- 跨机 peer 通讯(见 docs/peer.md) ----
+# 起本节点: make peer-serve(读 .env 的 PEER_SHARED/PEER_NAME/PEER_BIND/PEER_PORT)
+peer-serve: check-peer
+	@$(LUME) peer_node.lume
+
+# 探测对端: make peer-probe PEER_HOST=192.168.1.20:18092
+peer-probe: check-peer
+	@$(LUME) peer_probe.lume
+
+check-peer:
+	@$(LUME) --check peer_node.lume
+	@$(LUME) --check peer_probe.lume
+
 # 安装 git 钩子: 提交前自动跑 privacy --staged(只查本次暂存的改动)。
 hooks:
 	@printf '#!/bin/sh\ncd "$$(git rev-parse --show-toplevel)" || exit 1\nexec %s scripts/check_privacy.py --staged\n' "$(PY)" > .git/hooks/pre-commit
@@ -192,7 +224,7 @@ watch:
 dev: stop check scan router-fetch
 	@echo "▶ http://127.0.0.1:$(PORT)  (make dev:热更已开,.tsx 改动自动重打包)"
 	@$(ESBUILD) src/lan/app.tsx --bundle --format=esm --jsx=automatic --outdir=www --outbase=src/lan --watch &
-	@mkdir -p .runtime; { ( while true; do sleep $(REFRESH_SECS); $(PY) scripts/scan_lan.py >/dev/null 2>&1 || true; $(PY) scripts/router_fetch.py >/dev/null 2>&1 || true; $(PY) scripts/adguard_fetch.py >/dev/null 2>&1 || true; done ) & echo $$! > .runtime/refresh.pid; }
+	@mkdir -p .runtime; { ( while true; do sleep $(REFRESH_SECS); $(PY) scripts/scan_lan.py >/dev/null 2>&1 || true; $(PY) scripts/router_fetch.py >/dev/null 2>&1 || true; $(PY) scripts/adguard_fetch.py >/dev/null 2>&1 || true; $(PY) scripts/peers_fetch.py >/dev/null 2>&1 || true; done ) & echo $$! > .runtime/refresh.pid; }
 	@echo "▶ esbuild watch 后台运行;数据每 $(REFRESH_SECS)s 自动刷新(pid $$(cat .runtime/refresh.pid))"
 	@echo "▶ Lume 起服务中(Ctrl-C 停;残留 watch/数据循环由 make stop 清理)"
 	@$(LUME) lan.lume
@@ -269,7 +301,8 @@ docker-compose:
 docker-compose-down:
 	@docker compose down
 
-.PHONY: default dev lan lan-dev stop scan scan-sweep check test privacy hooks ui watch router-fetch notify-test daily-digest \
-         adguard-up adguard-down adguard-log dns-fetch dns-watch \
+.PHONY: default dev lan lan-dev stop scan scan-sweep check test privacy hooks peer-serve peer-probe check-peer ui watch router-fetch notify-test daily-digest \
+         adguard-up adguard-down adguard-log dns-fetch dns-watch peers-fetch \
+         a2a-worker a2a-worker-once \
          block block-list unblock \
          docker-fetch docker-build docker-build-multiarch docker-run docker-up docker-down docker-redeploy docker-compose docker-compose-down

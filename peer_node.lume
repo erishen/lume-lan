@@ -1,0 +1,312 @@
+// peer_node.lume — 跨机 peer 节点服务端(两台机器各起一个)
+//
+// 启动(节点 B):
+//   PEER_SHARED=<共享密钥> PEER_NAME=nodeB PEER_BIND=0.0.0.0 PEER_PORT=18092 \
+//     ~/.local/bin/lume peer_node.lume
+//
+// 端点(全部需签名; 未配 PEER_SHARED 时整面关闭):
+//   GET  /peer/health   健康与身份
+//   GET  /peer/tools    本节点能力清单
+//   POST /peer/ask      接收对端提问(body 参与签名)
+//
+// 说明: lume 的 route handler **读不到请求头**, 所以认证参数走 query
+// (node/ts/nonce/sig), 详见 ../lume-core/lib/peer.lume 文件头。
+// peer 模块已下沉到 lume-core(../lume-core/lib/peer.lume)
+import "../lume-core/lib/peer.lume" as peer;
+import "src/peer/agent.lume" as agent;
+import "src/a2a.lume" as a2a;
+import "src/a2a_tasks.lume" as tasks;
+
+let bind_addr = env("PEER_BIND");
+if (bind_addr == null) { bind_addr = "127.0.0.1"; }
+let port_s = env("PEER_PORT");
+if (port_s == null) { port_s = "18092"; }
+
+server {
+  port = int(port_s);
+  workers = 2;
+  bind = bind_addr;
+};
+
+get "/peer/health", (req) => {
+  let v = peer.verify(req, "GET", "GET " + peer.path_only(req.path));
+  if (!get(v, "ok", false)) {
+    return { ok: false, unauthorized: true, error: get(v, "error", "") };
+  }
+  return {
+    ok: true,
+    node: peer.node_info()["name"],
+    peer: get(v, "node", ""),
+    ts: int(now()),
+  };
+};
+
+get "/peer/tools", (req) => {
+  let v = peer.verify(req, "GET", "GET " + peer.path_only(req.path));
+  if (!get(v, "ok", false)) {
+    return { ok: false, unauthorized: true, error: get(v, "error", "") };
+  }
+  // 真实工具清单来自本机 agent-httpd 的 MCP 注册表; agent 没起时降级为空清单 + 错误说明
+  let t = agent.list_tools();
+  let raw = get(t, "tools", []);
+  // 给每个工具补 when_to_use(能力层): 没有它 agent 只能看名字猜, 实测会退化成
+  // 用 fs 工具乱翻文件。这里按工具名前缀给一个粗粒度提示, 够用且不用逐工具维护。
+  let out = [];
+  let i = 0;
+  while (i < len(raw)) {
+    let d = get(raw, i, {});
+    let nm = str(get(d, "name", ""));
+    push(out, {
+      name: nm,
+      "server": str(get(d, "server", "")),
+      desc: str(get(d, "desc", "")),
+      "when_to_use": when_hint(nm),
+    });
+    i = i + 1;
+  }
+  return {
+    ok: get(t, "ok", false),
+    node: peer.node_info()["name"],
+    summary: "局域网设备看板 + 本机 agent 的工具集。查局域网设备/流量/DNS 时用 lan.*;" +
+             "查本机文件、记忆、投资体检时用 fs/memory/portfolio-check 等。",
+    tools: out,
+    error: get(t, "error", ""),
+    agent_status: get(t, "status", 0),
+  };
+};
+
+// 按工具名前缀给「什么时候用」的提示。返回空串表示没有专门提示, 调用方退到 desc。
+func when_hint(nm: string) {
+  if (len(str_match("^fs__read|^fs__list|^fs__search|^fs__get|^fs__directory", nm)) > 0) {
+    return "需要读本机文件内容/目录结构时用。只读。";
+  }
+  if (len(str_match("^fs__write|^fs__edit|^fs__create|^fs__move", nm)) > 0) {
+    return "需要改本机文件时用。写操作, 慎用。";
+  }
+  if (len(str_match("^memory__read|^memory__search|^memory__open", nm)) > 0) {
+    return "需要回忆之前记住的东西时用。";
+  }
+  if (len(str_match("^memory__", nm)) > 0) {
+    return "需要写入/修改长期记忆时用。";
+  }
+  if (len(str_match("^echo__", nm)) > 0) {
+    return "纯连通性测试, 回显输入。";
+  }
+  if (len(str_match("^portfolio-check", nm)) > 0) {
+    return "做投资前数据体检时用(只读、无副作用)。";
+  }
+  if (len(str_match("^pse-review", nm)) > 0) {
+    return "要生成投资复盘周报时用。耗时 3-10 分钟。";
+  }
+  if (len(str_match("^think__", nm)) > 0) {
+    return "需要多步推理时用。";
+  }
+  return "";
+};
+
+// 执行本节点的一个 MCP 工具。body: {"tool":"<name>","arguments":{...}}
+// 注意: 这是**写/执行**类操作, 签名同时覆盖 body, 且调用方必须在 tools 清单里
+// 事先看到过该工具名 —— 但服务端不做白名单, 授权靠 PEER_SHARED 共享范围控制。
+post "/peer/invoke", (req) => {
+  let body = str(get(req, "body", ""));
+  let v = peer.verify(req, "POST", "POST " + peer.path_only(req.path) + "\n" + body);
+  if (!get(v, "ok", false)) {
+    return { ok: false, unauthorized: true, error: get(v, "error", "") };
+  }
+  let parsed = try(() => json(body));
+  if (parsed.err != null) {
+    return { ok: false, error: "body 不是合法 JSON" };
+  }
+  let tool_name = str(get(parsed.ok, "tool", ""));
+  if (len(tool_name) == 0) {
+    return { ok: false, error: "缺少 tool 字段" };
+  }
+  // arguments 原样透传(已是 JSON 对象时 stringify 回去, 保证是合法 JSON 文本)
+  let args_val = get(parsed.ok, "arguments", null);
+  let args_json = "{}";
+  if (args_val != null) { args_json = stringify(args_val); }
+
+  let r = agent.invoke_tool(tool_name, args_json);
+  return {
+    ok: get(r, "ok", false),
+    node: peer.node_info()["name"],
+    from: get(v, "node", ""),
+    "tool": tool_name,
+    result: get(r, "result", ""),
+    error: get(r, "error", ""),
+    agent_status: get(r, "status", 0),
+  };
+};
+
+post "/peer/ask", (req) => {
+  let body = str(get(req, "body", ""));
+  let v = peer.verify(req, "POST", "POST " + peer.path_only(req.path) + "\n" + body);
+  if (!get(v, "ok", false)) {
+    return { ok: false, unauthorized: true, error: get(v, "error", "") };
+  }
+  let parsed = try(() => json(body));
+  if (parsed.err != null) {
+    return { ok: false, error: "body 不是合法 JSON" };
+  }
+  let question = str(get(parsed.ok, "question", ""));
+  if (len(question) == 0) {
+    return { ok: false, error: "缺少 question 字段" };
+  }
+  let session_id = str(get(parsed.ok, "sessionId", ""));
+
+  // 转发给本机 agent(http-httpd 的 SSE 端点, 由 agent.lume 整体收 + 解析)
+  let a = agent.ask(question, session_id);
+  return {
+    ok: get(a, "ok", false),
+    node: peer.node_info()["name"],
+    from: get(v, "node", ""),
+    question: question,
+    answer: get(a, "answer", ""),
+    notes: get(a, "notes", []),
+    error: get(a, "error", ""),
+    // complete=false 说明 SSE 没收到 done, 回答可能被截断(超时/max_bytes)
+    complete: get(a, "complete", false),
+    events: get(a, "events", 0),
+    agent_status: get(a, "status", 0),
+  };
+};
+
+// 本机 agent 是否可达 —— 让对端能在调用前先判断, 而不是拿到一个空回答
+get "/peer/agent", (req) => {
+  let v = peer.verify(req, "GET", "GET " + peer.path_only(req.path));
+  if (!get(v, "ok", false)) {
+    return { ok: false, unauthorized: true, error: get(v, "error", "") };
+  }
+  let p = agent.ping();
+  return {
+    ok: true,
+    node: peer.node_info()["name"],
+    endpoint: agent.endpoint(),
+    agent_ok: get(p, "ok", false),
+    agent_status: get(p, "status", 0),
+    agent_error: get(p, "error", ""),
+  };
+};
+
+// ══════════════════════════════════════════════════════════════════
+// A2A 兼容接口(与 lume-blog 同一套规范, 见 lume-blog/peer_node.lume)
+// ══════════════════════════════════════════════════════════════════
+
+get "/.well-known/agent-card.json", (req) => {
+  // 本节点背后是 agent-httpd, 能力来自它的 MCP 注册表; agent 没起时空清单。
+  let t = agent.list_tools();
+  let raw = get(t, "tools", []);
+  let tools = [];
+  let i = 0;
+  while (i < len(raw)) {
+    let d = get(raw, i, {});
+    let nm = str(get(d, "name", ""));
+    if (len(nm) > 0) {
+      push(tools, { name: nm, desc: str(get(d, "desc", "")),
+                    when_to_use: when_hint(nm) });
+    }
+    i = i + 1;
+  }
+  return a2a.card(
+    peer.node_info()["name"],
+    "局域网设备看板 + 本机 agent 的工具集。问局域网设备/流量/DNS, 或需要本机文件、" +
+    "记忆、投资体检能力时用这里。它背后是一个会推理的 agent, 不是固定查询。",
+    tools, "/a2a", true);
+};
+
+post "/a2a", (req) => {
+  let body = str(get(req, "body", ""));
+  let parsed = try(() => json(body));
+  if (parsed.err != null) {
+    return { jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } };
+  }
+  let rpc = parsed.ok;
+  let mid = get(rpc, "id", null);
+  let method = str(get(rpc, "method", ""));
+
+  if (method == "message/send" or method == "tasks/send") {
+    let params = get(rpc, "params", {});
+    let q = a2a.message_text(params);
+    if (len(q) == 0) {
+      return { jsonrpc: "2.0", id: mid,
+               error: { code: -32602, message: "params.message.parts 里没有 text" } };
+    }
+    let ctx = str(get(params, "contextId", ""));
+    if (len(ctx) == 0) { ctx = peer.new_message_id(); }
+
+    // ---- 多轮续发(与 lume-blog 同一套) ----
+    let resume_id = str(get(params, "id", ""));
+    if (len(resume_id) > 0) {
+      let existing = tasks.load(resume_id);
+      if (existing == null) {
+        return { jsonrpc: "2.0", id: mid,
+                 error: { code: -32001, message: "task not found: " + resume_id } };
+      }
+      let est = str(get(get(existing, "status", {}), "state", ""));
+      if (est == "completed" or est == "failed" or est == "canceled" or est == "rejected") {
+        // 任务不可变性: 追问要开新任务
+        return { jsonrpc: "2.0", id: mid,
+                 error: { code: -32004,
+                          message: "任务已终结(" + est + "), 不可恢复; " +
+                                   "请在同一 contextId 下发起新任务" } };
+      }
+      tasks.append_message(resume_id, "user", q);
+      if (est == "input-required") {
+        tasks.transition_msg(resume_id, "submitted", get(existing, "artifacts", []), "");
+      }
+      return { jsonrpc: "2.0", id: mid, result: tasks.load(resume_id) };
+    }
+
+    let tid = peer.new_task_id();
+
+    // 本节点的特殊之处: 背后是 agent, 直接转发(会真的推理与调工具)
+    let r = agent.ask(q, ctx);
+    if (!get(r, "ok", false)) {
+      // agent 不可达 -> failed, 不编造答案
+      return { jsonrpc: "2.0", id: mid, result: a2a.task(
+        tid, ctx, "failed",
+        [a2a.text_artifact(peer.new_message_id(),
+          "agent 不可达: " + str(get(r, "error", "")))]) };
+    }
+    return { jsonrpc: "2.0", id: mid, result: a2a.task(
+      tid, ctx, "completed",
+      [a2a.text_artifact(peer.new_message_id(), str(get(r, "answer", "")))]) };
+  }
+
+  // ---- 长任务: 查状态 / 取消(与 lume-blog 同一套, 见其 peer_node.lume) ----
+  if (method == "tasks/get" or method == "GetTask") {
+    let params = get(rpc, "params", {});
+    let tid = str(get(params, "id", ""));
+    if (len(tid) == 0) {
+      return { jsonrpc: "2.0", id: mid,
+               error: { code: -32602, message: "params.id 必填" } };
+    }
+    let t = tasks.load(tid);
+    if (t == null) {
+      return { jsonrpc: "2.0", id: mid,
+               error: { code: -32001, message: "task not found: " + tid } };
+    }
+    return { jsonrpc: "2.0", id: mid, result: t };
+  }
+
+  if (method == "tasks/cancel" or method == "CancelTask") {
+    let params = get(rpc, "params", {});
+    let tid = str(get(params, "id", ""));
+    let t = tasks.load(tid);
+    if (t == null) {
+      return { jsonrpc: "2.0", id: mid,
+               error: { code: -32001, message: "task not found: " + tid } };
+    }
+    let st = str(get(get(t, "status", {}), "state", ""));
+    if (st == "completed" or st == "failed" or st == "canceled") {
+      return { jsonrpc: "2.0", id: mid,
+               error: { code: -32002, message: "task not cancelable (state=" + st + ")" } };
+    }
+    return { jsonrpc: "2.0", id: mid,
+             result: tasks.transition(tid, "canceled", get(t, "artifacts", [])) };
+  }
+  return { jsonrpc: "2.0", id: mid,
+           error: { code: -32601, message: "method not found: " + method } };
+};
+
+run();

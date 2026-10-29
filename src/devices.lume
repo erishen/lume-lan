@@ -17,6 +17,10 @@ let hist_path = ".data/router_traffic_payload.json";
 // DNS 域名访问记录(.data/dns.json, 宿主 make dns-fetch 轮询 AdGuard Home 产出)。
 // 惰性单独端点 /api/dns; AdGuard 没跑 → 快照 reachable=false, 前端显示「未连接」。
 let dns_path = ".data/dns.json";
+// 可互访的 lume peer 节点(.data/peers.json, 宿主 scripts/peers_fetch.py 产出)。
+// 与 devices/router/dns 同一套「宿主采集 → 容器只读」分工: 容器在 Docker NAT
+// 网段里连不到宿主 loopback 上的 peer 端口, 所以探测放在宿主, 这里只读快照。
+let peers_path = ".data/peers.json";
 // 快照「过期」阈值(秒):超过就提示前端重新 make scan。可经 env 覆盖。
 let stale_secs = env("LAN_STALE_SECS");
 if (stale_secs == null) { stale_secs = "300"; }
@@ -224,5 +228,40 @@ export func router_payload() {
     router_topology: get(ro, "router_topology", {}),
     // 异常流量告警阈值(GB/近 1h, 前端据此标「谁在猛传」; env LAN_ANOMALY_GB 覆盖, 默认 10)。
     anomaly_gb: int(anomaly_gb_str),
+  };
+}
+
+// 可互访的 lume 应用:读 .data/peers.json(宿主 peers_fetch.py 探测产出)。
+// 缺文件 → available=false(提示去配 PEER_SHARED / PEER_TARGETS), 不 500。
+export func peers_payload() {
+  let txt = read_file(peers_path);
+  if (txt == null) {
+    return { available: false, enabled: false, reachable: false,
+             error: "缺少 .data/peers.json",
+             note: "未探测 peer 节点——在 .env 配 PEER_SHARED + PEER_TARGETS 后跑 make peers-fetch" };
+  }
+  let r = try(() => json(txt));
+  if (r.err != null || r.ok == null) {
+    return { available: false, enabled: false, reachable: false,
+             error: "peers.json 解析失败", note: "快照损坏——重跑 make peers-fetch" };
+  }
+  let ps = get(r.ok, "peers", []);
+  let fetched = int(get(r.ok, "fetched_at", 0));
+  let age = int(now()) - fetched;
+  if (age < 0) { age = 0; }
+  let stale = age > int(stale_secs);
+  return {
+    available: true,
+    enabled: get(r.ok, "enabled", false),
+    reachable: true,
+    stale: stale,
+    age_secs: age,
+    fetched_at: fetched,
+    targets: get(r.ok, "targets", []),
+    up_count: int(get(r.ok, "up_count", 0)),
+    total_count: int(get(r.ok, "total_count", 0)),
+    peers: ps,
+    error: get(r.ok, "error", ""),
+    note: get(r.ok, "error", ""),
   };
 }

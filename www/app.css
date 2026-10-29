@@ -456,3 +456,29 @@ footer.foot { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--l
   .dnsguide-step { font-size: 0.8rem; }
   .dnsguide-sub { font-size: 0.74rem; }
 }
+
+/* ---- 应用互访(peer 节点) ---- */
+.peersgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; margin-top: 12px; }
+.peerbox { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--card); }
+.peerbox.peerok { border-left: 3px solid var(--ok); }
+.peerbox.peerdown { border-left: 3px solid var(--off); opacity: 0.85; }
+.peerhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.peername { font-weight: 600; }
+.peermeta { font-size: 12px; color: var(--muted); }
+.peertools { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.peertool { font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 2px 7px; border-radius: 5px; background: rgba(var(--accent-rgb), 0.10);
+  color: var(--accent); border: 1px solid rgba(var(--accent-rgb), 0.22); }
+.peerchips { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
+.peerchip { font-size: 12px; color: var(--muted); padding-right: 10px;
+  border-right: 1px solid var(--line); }
+.peerchip:last-child { border-right: none; padding-right: 0; }
+.peerchip b { color: var(--fg); font-weight: 600; }
+.peererr { color: var(--red-text); }
+.peersempty { padding: 28px 20px; text-align: center; }
+.peerempty-title { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+.peersempty code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; padding: 1px 5px; border-radius: 4px;
+  background: rgba(var(--off-rgb), 0.14); }
+.peersfoot { margin-top: 14px; }
+.tabpanel code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }

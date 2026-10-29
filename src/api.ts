@@ -166,6 +166,40 @@ export interface DnsPayload {
   top_domains?: DnsDomain[];
 }
 
+/** 可互访的 lume peer 节点(.data/peers.json, 宿主 peers_fetch.py 探测产出)。 */
+export interface PeerTool { name: string; desc?: string; server?: string }
+export interface PeerNode {
+  /** host:port */
+  target: string;
+  enterable?: boolean;
+  reachable: boolean;
+  /** 对端 PEER_NAME */
+  name: string;
+  /** 对端 PEER_SITE_NAME(博客这类应用会给) */
+  site: string;
+  tools: PeerTool[];
+  /** /peer/info 的只读概要(可选端点, 只有声明了它的节点才有) */
+  info?: Record<string, unknown>;
+  error?: string;
+  fetched_at?: number;
+  latency_ms?: number;
+}
+export interface PeersPayload {
+  available: boolean;
+  /** 是否配了 PEER_SHARED; false 时整个 peer 面未启用 */
+  enabled: boolean;
+  reachable: boolean;
+  stale?: boolean;
+  age_secs?: number;
+  fetched_at?: number;
+  targets?: string[];
+  up_count?: number;
+  total_count?: number;
+  peers?: PeerNode[];
+  error?: string;
+  note?: string;
+}
+
 export interface RouterPayload {
   available: boolean;
   note?: string;
@@ -228,6 +262,10 @@ export function apiRouterTraffic(): Promise<RouterTrafficPayload> {
 
 export function apiDns(): Promise<DnsPayload> {
   return apiGet<DnsPayload>("/api/dns");
+}
+
+export function apiPeers(): Promise<PeersPayload> {
+  return apiGet<PeersPayload>("/api/peers");
 }
 
 export function fmtBytes(n?: number): string {

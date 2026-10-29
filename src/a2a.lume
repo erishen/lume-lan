@@ -1,0 +1,185 @@
+// a2a.lume — A2A Agent Card 生成 + 任务模型辅助
+//
+// 目的: 让 peer 节点同时满足两套接口 ——
+//   1) 私有 `/peer/tools`(轻量, 本仓库 bridge 用)
+//   2) 标准 `/.well-known/agent-card.json`(任何 A2A 客户端可发现)
+//
+// 版本口径: A2A v1.0 用 `supportedInterfaces` 数组声明端点; v0.3 只有一个
+// `url` 字段, 两者不兼容。这里两个都写 —— v1.0 客户端读数组, 老客户端读
+// url 兜底, 代价是多几行 JSON。
+//
+// 字段必填性(实测多个实现的校验器): `name` 必须是字符串, `skills` 必须是
+// 数组——这两项缺失就不是 Agent Card。其余字段校验器普遍宽松。
+//
+// 用法(在应用的 peer_node.lume 里):
+//   import "src/a2a.lume" as a2a;
+//   get "/.well-known/agent-card.json", (req) => { return a2a.card(...); };
+//
+// 注意: Agent Card 按规范是**公开未认证**的(客户端要能先发现、再决定要不要
+// 认证)。所以这个端点**不要**加签名校验 —— 但也因此只放"能公开的信息"。
+
+let CARD_VERSION = "1.0.0";
+let PROTOCOL_VERSION = "1.0";
+
+// 从 peer 节点自己的 host:port 拼出对外 base url。
+//
+// A2A 客户端会拿 card 里的 url **直接发请求** —— 这是最容易踩的坑:
+// 实测配了 `PEER_PUBLIC_URL=http://192.168.1.10:18191` 但节点只绑
+// `127.0.0.1`, 客户端照 card 去连直接 ConnectionRefused, 而 card 本身
+// 看起来完全正常(字段齐全), 排查时极易误判为客户端问题。
+//
+// 所以: 未配时回落到 PEER_BIND:PEER_PORT(至少自洽); 配了且明显不自洽
+// (绑 127.0.0.1 却宣告外部 IP)时, 在 card 里加一条 warning 字段 ——
+// 非规范字段, 但比让客户端莫名连不上有用。
+func base_url() {
+  let u = env("PEER_PUBLIC_URL");
+  if (u == null) {
+    // 没配: 用实际绑定地址拼, 保证 card 自洽
+    let b = env("PEER_BIND");
+    if (b == null) { b = "127.0.0.1"; }
+    let pt = env("PEER_PORT");
+    if (pt == null) { pt = "18088"; }
+    let host = str(b);
+    if (host == "0.0.0.0") { host = "127.0.0.1"; }
+    return "http://" + host + ":" + str(pt);
+  }
+  let s = str(u);
+  if (len(s) > 0) {
+    // 去掉末尾斜杠, 避免拼成 //a2a
+    let last = str_match("(.+)/$", s);
+    if (len(last) > 0) {
+      let g = get(get(last, 0, null), "groups", []);
+      if (len(g) > 0) { return str(get(g, 0, s)); }
+    }
+  }
+  return s;
+}
+
+// 把内部工具名切成 A2A skill。
+//   tools: [{name, desc, when_to_use}]  —— 来自各应用自己的 /peer/tools
+// A2A skill 必备: id / name / description / tags;examples 可选。
+// `when_to_use` 不能直接塞进 A2A 规范字段, 拼进 description —— 路由 agent
+// 判断"该不该来这里"靠的就是 description。
+func skills_from(tools) {
+  let out = [];
+  let i = 0;
+  while (i < len(tools)) {
+    let t = get(tools, i, {});
+    let nm = str(get(t, "name", ""));
+    let desc = str(get(t, "desc", ""));
+    let when = str(get(t, "when_to_use", ""));
+    if (len(nm) > 0) {
+      let full = desc;
+      if (len(when) > 0) {
+        if (len(full) > 0) { full = full + " 何时用: " + when; }
+        else { full = "何时用: " + when; }
+      }
+      if (len(full) == 0) { full = nm; }
+      // tags 取工具名前缀(blog.stats -> blog), 方便按应用筛选
+      let tag = nm;
+      let dot = str_match("^([a-z0-9_-]+)", nm);
+      if (len(dot) > 0) {
+        let g = get(get(dot, 0, null), "groups", []);
+        if (len(g) > 0) { tag = str(get(g, 0, nm)); }
+      }
+      push(out, {
+        id: nm,
+        name: nm,
+        description: full,
+        tags: [tag],
+      });
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
+// 生成 Agent Card。
+//   name        —— 节点名(必填, 字符串)
+//   description —— 应用摘要(建议写清边界: 能做什么 / 不该做什么)
+//   tools       —— [{name, desc, when_to_use}]
+//   a2a_path    —— A2A 任务端点路径, 默认 /a2a
+// 返回 map, 由 route handler 直接作为 JSON body。
+export func card(name: string, description: string, tools, a2a_path: string, agent_backed) {
+  let base = base_url();
+  let path = a2a_path;
+  if (len(path) == 0) { path = "/a2a"; }
+  let url = base + path;
+  // 自洽性检查: 绑 loopback 却在 card 里宣告外部地址 -> 客户端可能连不上
+  let bind = env("PEER_BIND");
+  let warn = "";
+  if (bind != null and str(bind) == "127.0.0.1"
+      and len(str_match("127\\.0\\.0\\.1", base)) == 0) {
+    warn = "节点只绑 127.0.0.1, 但 card 宣告 " + base +
+           " —— 外部客户端会连不上。跨机访问请设 PEER_BIND=0.0.0.0, " +
+           "本机调试请把 PEER_PUBLIC_URL 设成 http://127.0.0.1:<端口>";
+  }
+  return {
+    name: name,
+    description: description,
+    version: CARD_VERSION,
+    protocolVersion: PROTOCOL_VERSION,
+    // ---- A2A v1.0 ----
+    supportedInterfaces: [
+      { protocolVersion: PROTOCOL_VERSION, protocolBinding: "JSONRPC", url: url },
+    ],
+    // ---- v0.3 兼容 ----
+    url: url,
+    capabilities: {
+      // message/send 与 message/stream 均已实现。
+      // 注意 stream 的语义: 同步执行 + 事件回放(lume 无异步原语), 客户端收到
+      // 的事件序列符合规范, 但没有"边跑边看"。这一点在 docs/peer.md 写明。
+      streaming: true,
+      pushNotifications: false,
+      // 自定义扩展位(规范允许): 声明这个节点背后是不是一个会推理的 agent。
+      // 客户端据此决定对模糊问题的预期: agent 能答, 固定查询节点只能回
+      // input-required。不声明时按 false 处理。
+      agent_backed: agent_backed == true,
+    },
+    defaultInputModes: ["text/plain", "application/json"],
+    defaultOutputModes: ["text/plain", "application/json"],
+    skills: skills_from(tools),
+    // 非 A2A 规范字段(规范允许扩展): 自洽性告警, 空串表示没问题
+    warnings: warn,
+  };
+}
+
+// 一个 A2A Task 对象。
+export func task(id: string, context_id: string, state: string, artifacts) {
+  return {
+    id: id,
+    contextId: context_id,
+    kind: "task",
+    status: { state: state, timestamp: str(now()) },
+    artifacts: artifacts,
+  };
+}
+
+// text artifact(最常见的返回形态)
+export func text_artifact(id: string, text: string) {
+  return {
+    artifactId: id,
+    parts: [{ kind: "text", text: text }],
+  };
+}
+
+// 从 A2A message/send 的 params 里取纯文本。
+// params.message.parts[] 里可能有 text / file / data 多种, 这里只取 text。
+// 取不到返回空串 —— 调用方据此回 -32602。
+export func message_text(params) {
+  let msg = get(params, "message", {});
+  let parts = get(msg, "parts", []);
+  let out = "";
+  let i = 0;
+  while (i < len(parts)) {
+    let p = get(parts, i, {});
+    let kind = str(get(p, "kind", ""));
+    if (kind == "text") {
+      let t = str(get(p, "text", ""));
+      if (len(out) > 0) { out = out + "\n"; }
+      out = out + t;
+    }
+    i = i + 1;
+  }
+  return out;
+}

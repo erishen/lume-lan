@@ -6,10 +6,12 @@ import {
   RouterDevice,
   RouterTrafficPayload,
   DnsPayload,
+  PeersPayload,
   apiDevices,
   apiRouter,
   apiRouterTraffic,
   apiDns,
+  apiPeers,
   fmtTs,
   fmtAge,
   fmtBytes,
@@ -18,6 +20,7 @@ import { isActive, LanRow } from "./types";
 import { TrafficChart, PerDeviceChart } from "./charts";
 import { DeviceRow, WanCard, DeviceDetail } from "./device";
 import { DnsPanel } from "./dns";
+import { PeersPanel } from "./peers";
 
 export function Dashboard(): React.ReactElement {
   const [data, setData] = React.useState<DevicesPayload | null>(null);
@@ -32,11 +35,12 @@ export function Dashboard(): React.ReactElement {
    * 260KB 历史)期间界面看起来毫无反应。 */
   const [refreshing, setRefreshing] = React.useState(false);
   /* Tab 分区: 总览(网络/流量/排行) / 设备(统一设备表+详情) / 域名访问(DNS 记录) */
-  const [tab, setTab] = React.useState<"overview" | "devices" | "dns">("overview");
+  const [tab, setTab] = React.useState<"overview" | "devices" | "dns" | "peers">("overview");
   /* 单设备流量趋势: 点选某台设备(Top5/终端行)看它近 5h 自己的曲线 */
   const [selIp, setSelIp] = React.useState<string>("");
   const [rtrTraffic, setRtrTraffic] = React.useState<RouterTrafficPayload | null>(null);
   const [dns, setDns] = React.useState<DnsPayload | null>(null);
+  const [peers, setPeers] = React.useState<PeersPayload | null>(null);
 
   const load = React.useCallback(async () => {
     setErr("");
@@ -56,14 +60,16 @@ export function Dashboard(): React.ReactElement {
         const t = setTimeout(() => res(null), ms);
         p.then((v) => { clearTimeout(t); res(v); }).catch(() => { clearTimeout(t); res(null); });
       });
-    const [ro, rt, dn] = await Promise.all([
+    const [ro, rt, dn, pr] = await Promise.all([
       withTimeout(apiRouter(), 6000),
       withTimeout(apiRouterTraffic(), 8000), // 该接口 ~5s/260KB, 单独放宽避免超时降级
       withTimeout(apiDns(), 6000),
+      withTimeout(apiPeers(), 6000),
     ]);
     if (ro) setRouter(ro);
     if (rt) setRtrTraffic(rt);
     if (dn) setDns(dn);
+    if (pr) setPeers(pr);
     setLastFetch(Date.now());
     /* 「刷新中…」至少停留 1.2s: 数据太快时也给人明确反馈(不会一闪而过)。 */
     const el = Date.now() - t0;
@@ -375,6 +381,9 @@ export function Dashboard(): React.ReactElement {
             <button type="button" className={"tab" + (tab === "dns" ? " sel" : "")} onClick={() => setTab("dns")}>
               域名访问{dns && (dns.client_count ?? 0) > 0 ? <span className="badge">{dns.client_count}</span> : null}
             </button>
+            <button type="button" className={"tab" + (tab === "peers" ? " sel" : "")} onClick={() => setTab("peers")}>
+              应用互访{peers && (peers.up_count ?? 0) > 0 ? <span className="badge">{peers.up_count}</span> : null}
+            </button>
             <span className="tabs-right">
               <span className="hint">快照于 {fmtTs(data.scanned_at)}</span>
               <button className="btn" disabled={refreshing} onClick={() => void load()}>{refreshing ? "刷新中…" : "刷新"}</button>
@@ -574,6 +583,12 @@ export function Dashboard(): React.ReactElement {
           {tab === "dns" ? (
             <div className="tabpanel">
               {dns ? <DnsPanel dns={dns} ipNames={ipNames} hostIp={data.host_ip || ""} /> : <div className="dnsoff">域名访问数据未加载（AdGuard 未连接或尚未抓取）。</div>}
+            </div>
+          ) : null}
+
+          {tab === "peers" ? (
+            <div className="tabpanel">
+              <PeersPanel peers={peers} />
             </div>
           ) : null}
         </>

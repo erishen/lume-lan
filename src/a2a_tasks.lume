@@ -1,0 +1,206 @@
+// a2a_tasks.lume — A2A 长任务的状态存储
+//
+// 为什么需要它: 原实现 `message/send` 同步阻塞 —— pse-review 跑 10 分钟就得
+// 硬等，断网全丢，中间没有进度。A2A 的解法是 Task 生命周期:
+//   submitted → working → completed / failed / input-required / canceled
+// 客户端拿 taskId 轮询 tasks/get，而不是占着一条连接。
+//
+// ── 存储形态 ────────────────────────────────────────────────────────
+// 每个 task 一个 JSON 文件: .data/a2a-tasks/<id>.json
+// 为什么不用 sqlite: lume 的 sql_query 在别的进程写入时会静默返回空(实测踩过,
+// 见 lume-lan/docs/peer.md), 任务状态丢了比查询结果丢了严重得多。
+// 单文件 + 原子写 + 文件锁, 行为可预测。
+//
+// ── 并发 ────────────────────────────────────────────────────────────
+// peer_node 配了 workers=2, 多个 worker 可能同时写。写走 lock_file 串行化，
+// 读不加锁(读到旧状态无害, 下一次轮询会拿到新的)。
+//
+// ── 谁真正执行任务 ──────────────────────────────────────────────────
+// lume 没有 spawn/exec, http_* 也是同步阻塞的 —— 所以**异步执行不在这里**。
+// 本模块只负责状态机; 实际干活由宿主进程做(见 scripts/a2a_worker.py):
+//   1. lume 侧收到 message/send + 长任务意图 → 落 submitted 状态 → 立即返回 taskId
+//   2. 宿主 worker 扫到 submitted → 置 working → 执行 → 置 completed + artifacts
+//   3. 客户端轮询 tasks/get 看到最终状态
+// 这样 lume 侧永远不阻塞, worker 挂了任务停在 working, 客户端能看出异常。
+
+let task_dir = ".data/a2a-tasks";
+let task_ttl_secs = env("A2A_TASK_TTL_SECS");
+if (task_ttl_secs == null) { task_ttl_secs = "86400"; }   // 默认 24h 后清理
+
+func ensure_dir() {
+  mkdir(task_dir);
+}
+
+func task_path(id: string): string {
+  // id 来自我们自己生成的 hex, 但仍做一次白名单校验 —— 防路径穿越
+  if (len(id) == 0 or len(id) > 64) { return ""; }
+  let bad = str_match("[^a-zA-Z0-9_-]", id);
+  if (len(bad) > 0) { return ""; }
+  return task_dir + "/" + id + ".json";
+}
+
+// 写一个任务(原子: 先写 .tmp 再 rename)。加文件锁避免两个 worker 互相覆盖。
+export func save(task) {
+  ensure_dir();
+  let id = str(get(task, "id", ""));
+  let p = task_path(id);
+  if (len(p) == 0) { return false; }
+  let lockp = task_dir + "/.lock";
+  // lume 没有 rename/unlink 内建(docs/LUME.md 的文件内建只有
+  // files/read_file/write_file/mkdir/lock_file/unlock_file)。
+  // 所以「原子写」降级为: 文件锁内直接覆盖写。
+  // 取舍: 读者可能读到半截 JSON —— load() 用 try() 接住损坏返回 null，
+  // 客户端下次轮询就拿到完整状态，不会把半截当成有效任务。
+  let locked = lock_file(lockp);
+  let ok = write_file(p, stringify(task));
+  if (locked) { unlock_file(lockp); }
+  return ok != null;
+}
+
+// 读任务; 不存在或损坏 → null
+export func load(id: string) {
+  let p = task_path(id);
+  if (len(p) == 0) { return null; }
+  let txt = read_file(p);
+  if (txt == null) { return null; }
+  let r = try(() => json(txt));
+  if (r.err != null || r.ok == null) { return null; }
+  return r.ok;
+}
+
+// 状态流转: 只改 status/artifacts/updated, 其它字段保持
+export func transition(id: string, state: string, artifacts) {
+  return transition_msg(id, state, artifacts, "");
+}
+
+// 带状态消息的流转。`status.message` 是 A2A 规定的**告知客户端需要什么**的
+// 位置(input-required 时尤其重要); 它和 artifacts 是两回事:
+//   artifacts      = 已完成产出的内容
+//   status.message = 当前状态要说的话(通常是 agent 在提问)
+export func transition_msg(id: string, state: string, artifacts, msg_text: string) {
+  let t = load(id);
+  if (t == null) { return null; }
+  let old = get(t, "status", {});
+  let st = {
+    state: state,
+    timestamp: str(now()),
+    // 保留原始创建时间, 便于算耗时
+    created_at: get(old, "created_at", str(now())),
+  };
+  if (len(msg_text) > 0) {
+    st = put(st, "message", {
+      role: "agent",
+      parts: [{ kind: "text", text: msg_text }],
+    });
+  }
+  let next = {
+    id: get(t, "id", id),
+    contextId: get(t, "contextId", ""),
+    kind: "task",
+    status: st,
+    artifacts: artifacts,
+    history: get(t, "history", []),
+    metadata: get(t, "metadata", {}),
+  };
+  save(next);
+  return next;
+}
+
+// 新建一个 submitted 任务。payload 是要执行的动作(worker 用它派活)。
+export func create(id: string, context_id: string, payload) {
+  let t = {
+    id: id,
+    contextId: context_id,
+    kind: "task",
+    status: { state: "submitted", timestamp: str(now()),
+              created_at: str(now()) },
+    artifacts: [],
+    history: [],
+    // payload 不是 A2A 规范字段, 用 metadata 承载:
+    // 规范允许 metadata 放任意扩展数据, 客户端会忽略它。
+    metadata: { payload: payload },
+  };
+  save(t);
+  return t;
+}
+
+// 取 sha256 前 20 字符做 id(本模块不依赖 peer.lume, 自带一份)
+func head20(h: string): string {
+  let m = str_match("^(.{0,20})", h);
+  if (len(m) == 0) { return ""; }
+  let g = get(get(m, 0, null), "groups", []);
+  if (len(g) == 0) { return ""; }
+  return str(get(g, 0, ""));
+}
+
+// 追加一条消息到任务历史。
+// 多轮的关键: 客户端续发时带同一个 taskId, 我们要把它记进 history,
+// 否则下一轮 worker 看不到"用户回答了什么问题"。
+export func append_message(id: string, role: string, text: string) {
+  let t = load(id);
+  if (t == null) { return null; }
+  let h = get(t, "history", []);
+  push(h, {
+    role: role,
+    // 不依赖 peer.lume 的 prefix_of(本模块可独立使用), 直接截 sha256 前 20 字符
+    messageId: head20(sha256(id + text + str(now()))),
+    parts: [{ kind: "text", text: text }],
+    timestamp: str(now()),
+  });
+  t = put(t, "history", h);
+  save(t);
+  return t;
+}
+
+// 取最近一条用户消息(续发时用), 没有则空串
+export func last_user_text(id: string) {
+  let t = load(id);
+  if (t == null) { return ""; }
+  let h = get(t, "history", []);
+  let i = len(h) - 1;
+  while (i >= 0) {
+    let m = get(h, i, {});
+    if (str(get(m, "role", "")) == "user") {
+      let parts = get(m, "parts", []);
+      if (len(parts) > 0) { return str(get(get(parts, 0, {}), "text", "")); }
+    }
+    i = i - 1;
+  }
+  return "";
+}
+
+// 过期清理: 超过 TTL 的已终结任务删掉。由 worker 每轮调用。
+// 返回删除数量。
+export func gc() {
+  let names = files(task_dir);
+  let now_s = int(now());
+  let n = 0;
+  let stale = [];
+  let i = 0;
+  while (i < len(names)) {
+    let nm = str(get(names, i, ""));
+    if (len(nm) > 5 and str_match("\\.json$", nm) != null and len(str_match("\\.json$", nm)) > 0) {
+      // 从文件名取 id(去掉 .json)
+      let m = str_match("^([a-zA-Z0-9_-]+)\\.json$", nm);
+      if (len(m) > 0) {
+        let g = get(get(m, 0, null), "groups", []);
+        if (len(g) > 0) {
+          let tid = str(get(g, 0, ""));
+          let t = load(tid);
+          if (t != null) {
+            let st = str(get(get(t, "status", {}), "state", ""));
+            let ts = int(get(get(t, "status", {}), "created_at", "0"));
+            let done = (st == "completed" or st == "failed" or st == "canceled");
+            if (done and (now_s - ts) > int(task_ttl_secs)) {
+              push(stale, tid);
+              n = n + 1;
+            }
+          }
+        }
+      }
+    }
+    i = i + 1;
+  }
+  // lume 无 unlink: 返回待删清单, 由宿主 worker 执行实际删除
+  return { count: n, stale: stale };
+}

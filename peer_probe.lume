@@ -1,0 +1,139 @@
+// peer_probe.lume — 从本节点探测远端 peer 节点(连通性自检)
+//
+// 用法:
+//   PEER_SHARED=<共享密钥> PEER_NAME=nodeA PEER_HOST=192.168.1.20:18092 \
+//     ~/.local/bin/lume peer_probe.lume
+//
+// 会依次验证: SSRF 闸门行为 / 健康探测 / 能力发现 / POST 提问 / 篡改签名被拒 /
+// 过期时间戳被拒。全部命中预期即 exit 0, 任一不符 exit 1 —— 可直接当部署后的
+// 验活命令, 也可塞进 CI 或 launchd。
+// peer 模块已下沉到 lume-core(../lume-core/lib/peer.lume)
+import "../lume-core/lib/peer.lume" as peer;
+
+let peer_host = env("PEER_HOST");
+if (peer_host == null) { peer_host = "127.0.0.1:18092"; }
+
+// 用 map 作可变累加器: 顶层标量在函数内赋值是复制, 改不到外层(实测踩到)
+let acc = { fails: 0 };
+
+// 读 try() 结果的字段: 解析失败时 try().ok 是 null, 直接 get(null,..) 会抛
+// "get() expects a map or list and a key"。统一走这个兜底。
+func field_of(t, k: string, d) {
+  let v = get(t, "ok", null);
+  if (v == null) { return d; }
+  return get(v, k, d);
+}
+
+func check(label: string, got: string, want: string) {
+  if (got == want) {
+    print("  ✓ " + label);
+  } else {
+    print("  ✗ " + label + "  want=" + want + " got=" + got);
+    put(acc, "fails", int(get(acc, "fails", 0)) + 1);
+  }
+}
+
+print("peer probe → " + peer_host + " (as " + peer.node_info()["name"] + ")");
+
+// 1. 闸门: 不放行私有地址时必须被拒(证明 allow_private 真的在起作用,
+//    否则意味着 SSRF 闸门失效, 那是更严重的问题)
+let g = http_get(peer.signed_url(peer_host, "/peer/health", ""), { timeout: 5 });
+check("SSRF 闸门拦截私有地址", str(get(g, "ok", false)), "false");
+
+// 2. 健康探测
+let h = http_get(peer.signed_url(peer_host, "/peer/health", ""),
+                 { timeout: 5, allow_private: true });
+check("health 可达", str(get(h, "ok", false)), "true");
+let hj = try(() => json(str(get(h, "body", ""))));
+check("health 认证通过", str(field_of(hj, "ok", false)), "true");
+
+// 3. 能力发现
+let t = http_get(peer.signed_url(peer_host, "/peer/tools", ""),
+                 { timeout: 5, allow_private: true });
+let tj = try(() => json(str(get(t, "body", ""))));
+check("tools 可达", str(field_of(tj, "ok", false)), "true");
+
+// 4. POST 提问 —— 只有对端的 tools 清单声明了 agent 能力时才要求它存在。
+// peer 协议是**能力面协商**而不是固定契约: 一个只读节点(比如博客)没有
+// /peer/ask 完全合法, 探针不该因此判失败。
+let names = [];
+let tlist = field_of(tj, "tools", []);
+let ti = 0;
+while (ti < len(tlist)) {
+  push(names, str(get(get(tlist, ti, null), "name", "")));
+  ti = ti + 1;
+}
+let has_agent = false;
+let na = 0;
+while (na < len(names)) {
+  let nm = str(get(names, na, ""));
+  // 注意: str_match 无匹配时返回**空列表**而不是 null, 必须用 len() 判
+  if (len(str_match("^agent", nm)) > 0) { has_agent = true; }
+  na = na + 1;
+}
+if (has_agent) {
+  let body = stringify({ question: "peer probe ping", from: str(get(peer.node_info(), "name", "probe")) });
+  let a = http_post(peer.signed_url(peer_host, "/peer/ask", body),
+                    { timeout: 90, max_bytes: 1048576, allow_private: true, body: body });
+  let aj = try(() => json(str(get(a, "body", ""))));
+  check("ask POST 送达", str(field_of(aj, "ok", false)), "true");
+} else {
+  print("  · 对端未声明 agent 能力, 跳过 ask(只读节点属正常)");
+}
+
+// 5. 篡改签名必须被拒
+let bad = peer.signed_url(peer_host, "/peer/health", "") + "x";
+let b = http_get(bad, { timeout: 5, allow_private: true });
+let bj = try(() => json(str(get(b, "body", ""))));
+check("篡改签名被拒", str(field_of(bj, "unauthorized", false)), "true");
+
+// 6. 过期时间戳必须被拒
+let old = "http://" + peer_host +
+          "/peer/health?node=x&ts=1&nonce=n&sig=deadbeef";
+let o = http_get(old, { timeout: 5, allow_private: true });
+let oj = try(() => json(str(get(o, "body", ""))));
+check("过期时间戳被拒", str(field_of(oj, "unauthorized", false)), "true");
+
+// 7. 对端 agent 桥接是否可达(agent-httpd 没起时这里是 false, 属预期降级, 不算失败;
+//    要把它当硬指标就注释掉下面的 warn 分支改为 check)
+let ag = http_get(peer.signed_url(peer_host, "/peer/agent", ""),
+                  { timeout: 10, allow_private: true });
+let agj = try(() => json(str(get(ag, "body", ""))));
+let agent_ok = str(field_of(agj, "agent_ok", false));
+if (agent_ok == "true") {
+  print("  ✓ 对端 agent 可达(" + str(field_of(agj, "endpoint", "")) + ")");
+} else {
+  print("  · 对端 agent 未就绪(降级): " + str(field_of(agj, "agent_error", "unknown")));
+}
+
+// 8. 对端工具清单(依赖 agent 就绪; 未就绪时同样降级提示)
+let tl = http_get(peer.signed_url(peer_host, "/peer/tools", ""),
+                  { timeout: 30, max_bytes: 1048576, allow_private: true });
+let tlj = try(() => json(str(get(tl, "body", ""))));
+if (agent_ok == "true") {
+  let n = len(field_of(tlj, "tools", []));
+  // 只有「agent 明确可达」时才把空清单当异常 —— 否则是降级
+  if (n > 0) {
+    print("  ✓ 对端工具清单(" + str(n) + " 个)");
+  } else {
+    print("  ✗ 对端工具清单为空, 但 agent 声称可达");
+    put(acc, "fails", int(get(acc, "fails", 0)) + 1);
+  }
+} else {
+  print("  · 跳过工具清单(agent 未就绪)");
+}
+
+if (int(get(acc, "fails", 0)) == 0) {
+  print("✓ 全部通过");
+} else {
+  print("✗ " + str(get(acc, "fails", 0)) + " 项未通过");
+}
+// 有 main() 时其返回值即进程退出码; 这里顶层裸表达式只作为末尾值,
+// 失败数由下面的 main() 转成退出码。
+func main(): int {
+  return int(get(acc, "fails", 0));
+}
+
+// lume 的退出码机制: 顶层必须**真的调用** main() —— 解释器在 exec_program 里
+// 拦截顶层 `main()` 表达式语句, 把返回值存为进程状态。只定义不调用等于没设。
+main();

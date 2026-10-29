@@ -18,3 +18,32 @@ export interface LanRow {
   rssi?: number | null; link_quality?: string; wired?: boolean | null; guest?: boolean;
   rx?: number; tx?: number; last_seen?: string; state: "on" | "idle" | "off";
 }
+
+/* ---- 可互访的 lume peer 节点(.data/peers.json, 宿主 peers_fetch.py 探测产出) ---- */
+/* 单个节点的探测结果。reachable=false 时 error 说明原因(拒绝/超时/签名失败)。 */
+export interface PeerNode {
+  target: string;          /* host:port */
+  reachable: boolean;
+  name: string;            /* 对端 PEER_NAME */
+  site: string;            /* 对端 PEER_SITE_NAME(博客这类应用会给) */
+  tools: { name: string; desc?: string; server?: string }[];
+  info?: Record<string, unknown>;   /* /peer/info 的只读概要(可选端点) */
+  error?: string;
+  fetched_at?: number;
+  latency_ms?: number;
+}
+
+export interface PeersPayload {
+  available: boolean;
+  enabled: boolean;        /* 是否配了 PEER_SHARED */
+  reachable: boolean;
+  stale?: boolean;
+  age_secs?: number;
+  fetched_at?: number;
+  targets?: string[];
+  up_count?: number;
+  total_count?: number;
+  peers?: PeerNode[];
+  error?: string;
+  note?: string;
+}

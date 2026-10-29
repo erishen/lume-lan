@@ -1,0 +1,149 @@
+// agent.lume — 把 agent-httpd 包装成可从 lume 同步调用的接口
+//
+// 两条通道:
+//   1. 对话:  POST /react/api/chat(SSE, 整体收 + 解析, 见 ask())
+//   2. 工具:  GET  /react/api/tools(清单) + POST /react/api/tools/call(执行)
+//             —— 见 list_tools() / invoke_tool(), 走的是 agent-httpd 的
+//             MCP 工具注册表(src/agent/tools_api.c)。
+//
+// 为什么对话要单独一层: lume 的 http_post 是**收完整个 body 才返回**, 不是流式;
+// agent-httpd 的 chat 只出 SSE。所以做「整体收 → 解析 → 拼回文本」。
+//
+// SSE 信封(agent-httpd src/agent/llm.c, 每个事件一行 `data: {...}`):
+//   {"t":"delta","d":"<文本>"}   增量 token
+//   {"t":"note","d":"<文本>"}    一次性状态行(ReAct 轮次 / 工具轨迹)
+//   {"t":"error","d":"<文本>"}   致命错误, 其后流结束
+//   {"t":"done"}                 终止标记
+
+let agent_url = env("AGENT_URL");
+if (agent_url == null) { agent_url = "http://127.0.0.1:18099"; }
+let agent_timeout = env("AGENT_TIMEOUT");
+if (agent_timeout == null) { agent_timeout = "90"; }
+let agent_tool_timeout = env("AGENT_TOOL_TIMEOUT");
+if (agent_tool_timeout == null) { agent_tool_timeout = "300"; }
+// 整体收的上限: 1 MiB(lume http_* 的 max_bytes 上限即 1 MiB)
+let agent_max_bytes = 1048576;
+
+// ── SSE 解析 ────────────────────────────────────────────────────────
+// ⚠️ 不要用 ^...$ 锚点: 实测 lume 的 str_match 不按多行匹配, "^data: (...)$"
+// 对整段 SSE 返回 0 条。必须用「以换行结尾」的模式逐条抓。
+export func parse_sse(raw: string) {
+  let text = raw + "\n";
+  let lines = str_match("data: ([^\n]*)\n", text);
+  let answer = "";
+  let notes = [];
+  let err = "";
+  let done = false;
+  let i = 0;
+  while (i < len(lines)) {
+    let g = get(get(lines, i, null), "groups", []);
+    let payload = str(get(g, 0, ""));
+    let o = try(() => json(payload));
+    if (o.err == null) {
+      let t = str(get(o.ok, "t", ""));
+      let d = str(get(o.ok, "d", ""));
+      if (t == "delta") {
+        answer = answer + d;
+      } else if (t == "note") {
+        push(notes, d);
+      } else if (t == "error") {
+        err = d;
+      } else if (t == "done") {
+        done = true;
+      }
+    }
+    i = i + 1;
+  }
+  return {
+    ok: (len(err) == 0),
+    answer: answer,
+    notes: notes,
+    error: err,
+    events: len(lines),
+    complete: done,
+  };
+}
+
+// ── 通道 1: agent 对话 ──────────────────────────────────────────────
+// session_id 非空时透传(agent-httpd 按 sessionId 存 transcript/facts)
+export func ask(question: string, session_id: string) {
+  let payload = { message: question };
+  if (len(session_id) > 0) { payload = { message: question, sessionId: session_id }; }
+  let body = stringify(payload);
+  let r = http_post(agent_url + "/react/api/chat",
+    { timeout: int(agent_timeout), max_bytes: agent_max_bytes, allow_private: true,
+      headers: { "Content-Type": "application/json" },
+      body: body });
+  if (!get(r, "ok", false)) {
+    return { ok: false, answer: "", notes: [], error: "agent 不可达: " + str(get(r, "err", "")),
+             status: int(get(r, "status", 0)), events: 0, complete: false };
+  }
+  let parsed = parse_sse(str(get(r, "body", "")));
+  return {
+    ok: get(parsed, "ok", false),
+    answer: get(parsed, "answer", ""),
+    notes: get(parsed, "notes", []),
+    error: get(parsed, "error", ""),
+    status: int(get(r, "status", 0)),
+    events: get(parsed, "events", 0),
+    complete: get(parsed, "complete", false),
+  };
+}
+
+// ── 通道 2: MCP 工具 ────────────────────────────────────────────────
+// 返回 { ok, tools:[...], error, status }
+export func list_tools() {
+  let r = http_get(agent_url + "/react/api/tools",
+    { timeout: 15, max_bytes: agent_max_bytes, allow_private: true });
+  if (!get(r, "ok", false)) {
+    return { ok: false, tools: [], error: "agent 不可达: " + str(get(r, "err", "")),
+             status: int(get(r, "status", 0)) };
+  }
+  let parsed = try(() => json(str(get(r, "body", ""))));
+  if (parsed.err != null) {
+    return { ok: false, tools: [], error: "tools 响应不是合法 JSON", status: int(get(r, "status", 0)) };
+  }
+  return {
+    ok: get(parsed.ok, "ok", false),
+    tools: get(parsed.ok, "tools", []),
+    error: "",
+    status: int(get(r, "status", 0)),
+  };
+}
+
+// 执行一个 MCP 工具。args_json 必须是 JSON 对象文本(如 "{\"text\":\"hi\"}"),
+// 传空串等价于 {}。返回 { ok, result|error, tool, status }。
+// 注意: 部分工具(如 pse-review)耗时可达数分钟, 用 AGENT_TOOL_TIMEOUT 控制。
+export func invoke_tool(tool_name: string, args_json: string) {
+  let args = args_json;
+  if (len(args) == 0) { args = "{}"; }
+  let payload = "{\"name\":" + stringify(tool_name) + ",\"arguments\":" + args + "}";
+  let r = http_post(agent_url + "/react/api/tools/call",
+    { timeout: int(agent_tool_timeout), max_bytes: agent_max_bytes, allow_private: true,
+      headers: { "Content-Type": "application/json" },
+      body: payload });
+  if (!get(r, "ok", false)) {
+    return { ok: false, result: "", error: "agent 不可达: " + str(get(r, "err", "")),
+             "tool": tool_name, status: int(get(r, "status", 0)) };
+  }
+  let parsed = try(() => json(str(get(r, "body", ""))));
+  if (parsed.err != null) {
+    return { ok: false, result: "", error: "调用响应不是合法 JSON", "tool": tool_name,
+             status: int(get(r, "status", 0)) };
+  }
+  let ok = get(parsed.ok, "ok", false);
+  let result = str(get(parsed.ok, "result", ""));
+  let err = str(get(parsed.ok, "error", ""));
+  return { ok: ok, result: result, error: err, "tool": tool_name, status: int(get(r, "status", 0)) };
+}
+
+// 健康检查(不需要 LLM key, 内置演示引擎也会回)
+export func ping() {
+  let r = http_get(agent_url + "/", { timeout: 5, allow_private: true });
+  return { ok: get(r, "ok", false), status: int(get(r, "status", 0)),
+           error: str(get(r, "err", "")) };
+}
+
+export func endpoint() {
+  return agent_url;
+}

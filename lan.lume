@@ -52,5 +52,12 @@ get "/api/dns", (req) => {
   return lantbl.dns_payload();
 };
 
+// 可互访的 lume peer 节点:读 .data/peers.json(宿主 scripts/peers_fetch.py 探测产出)。
+// 探测为什么不在容器里跑: 容器在 Docker NAT 网段, 连不到宿主 loopback 的 peer 端口,
+// 且 PEER_SHARED 不该进容器环境 —— 与 scan_lan.py 同一套「谁有权限谁采集」。
+get "/api/peers", (req) => {
+  return lantbl.peers_payload();
+};
+
 // 注册窗口关闭,开始伺服(与 crm.lume 同款——server{} 定义好路由后必须显式 run())。
 run();

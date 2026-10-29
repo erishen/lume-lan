@@ -5,7 +5,7 @@
  * 定时探测并写 .data/peers.json, 这里只读快照(与 devices/router/dns 同一套分工)。
  */
 import React from "react";
-import type { PeersPayload, PeerNode } from "../api";
+import type { PeersPayload, PeerNode, PendingTask, AuditRow } from "../api";
 
 function fmtAgo(ts?: number): string {
   if (!ts) return "—";
@@ -72,6 +72,91 @@ function PeerCard({ p }: { p: PeerNode }) {
         <div className="hint peererr">不可达: {p.error || "未知原因"}</div>
       )}
     </div>
+  );
+}
+
+/* ---- 待办审批 ----
+ * 为什么需要这块 UI: 审批链要求"人点一下确认", 而协议层只接受
+ * `<role>: approve` 这种字符串。没有表单的话, 每次批准都得手打角色名,
+ * 打错就等于没批(还会留一条 DENY 审计)。 */
+function StageChips({ t }: { t: PendingTask }) {
+  if (!t.policy || t.policy.length === 0) {
+    return <span className="hint">无审批链(直接执行)</span>;
+  }
+  return (
+    <div className="stageflow">
+      {t.policy.map((st, i) => {
+        const done = t.approved.includes(st.role);
+        const isNext = !done && t.approved.length === i;
+        const label = st.stage === "final" ? "人工终审" : st.node || st.role;
+        return (
+          <React.Fragment key={st.role + i}>
+            {i > 0 ? <span className="stagearrow">→</span> : null}
+            <span className={"stagechip" + (done ? " done" : isNext ? " next" : "")}>
+              {done ? "✓ " : ""}{label}
+            </span>
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
+export function PendingPanel({ pending }: { pending?: PendingTask[] }) {
+  if (!pending || pending.length === 0) {
+    return <div className="hint">没有待办审批。审批链由任务自己声明（`require_approval`）。</div>;
+  }
+  return (
+    <div className="pendinglist">
+      {pending.map((t) => (
+        <div className="pendingbox" key={t.id + t.source}>
+          <div className="pendinghead">
+            <span className={"dot " + (t.state === "input-required" ? "idle" : "on")} />
+            <span className="pendingtool mono">{t.tool || "(未知工具)"}</span>
+            {t.domain ? <span className="peerchip">{t.domain}</span> : null}
+            <span className="peermeta mono">{t.id.slice(0, 12)}</span>
+            <span className="peermeta">等 {fmtAgo(t.since)}</span>
+          </div>
+          <StageChips t={t} />
+          {t.waiting_for ? <div className="pendingwait">{t.waiting_for}</div> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ---- 审计 ----
+ * 任务的 history 只记对话, 不记决策; "谁在什么时候批了什么"只在审计里。
+ * 这里显示尾部若干条, 完整文件仍在 .data/a2a-audit.jsonl。 */
+const AUDIT_LABEL: Record<string, string> = {
+  approval_required: "请求审批",
+  approval_granted: "审批通过",
+  approval_denied: "越权被拒",
+  approval_step: "单级通过",
+  task_finished: "任务结束",
+};
+
+export function AuditPanel({ audit }: { audit?: AuditRow[] }) {
+  if (!audit || audit.length === 0) {
+    return <div className="hint">暂无审计记录。</div>;
+  }
+  return (
+    <table className="audittable">
+      <thead>
+        <tr><th>时间</th><th>事件</th><th>角色</th><th>决策</th><th>说明</th></tr>
+      </thead>
+      <tbody>
+        {audit.slice(0, 30).map((r, i) => (
+          <tr key={i} className={r.decision === "DENY" ? "auditdeny" : ""}>
+            <td className="mono">{fmtAgo(r.at)}</td>
+            <td>{AUDIT_LABEL[r.event] || r.event}</td>
+            <td className="mono">{r.role || r.claimed_role || r.required_role || "—"}</td>
+            <td className="mono">{r.decision || "—"}</td>
+            <td className="auditreason">{r.reason || ""}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -143,9 +228,16 @@ export function PeersPanel({ peers }: { peers: PeersPayload | null }) {
         </div>
       )}
 
+      <h3 className="peersec">待办审批</h3>
+      <PendingPanel pending={peers.pending} />
+
+      <h3 className="peersec">审计（最近 30 条）</h3>
+      <AuditPanel audit={peers.audit} />
+
       <div className="hint peersfoot">
         探测在<strong>宿主</strong>执行：看板跑在 Docker NAT 网段，连不到宿主
-        loopback 上的 peer 端口；<code>PEER_SHARED</code> 也不进容器。
+        loopback 上的 peer 端口；凭据也不进容器。审批与审计从{" "}
+        <code>PEER_STATE_DIRS</code> 指定的目录只读采集。
       </div>
     </>
   );

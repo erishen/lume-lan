@@ -259,6 +259,11 @@ export func peers_payload() {
     fetched_at: fetched,
     targets: get(r.ok, "targets", []),
     up_count: int(get(r.ok, "up_count", 0)),
+    // 待办审批 + 审计: 采集侧(peers_fetch.py)从 PEER_STATE_DIRS 读取执行方的
+    // 任务与审计文件。未配置来源时为空数组, 前端据此显示"无"而不是报错。
+    pending: get(r.ok, "pending", []),
+    audit: get(r.ok, "audit", []),
+    state_dirs: get(r.ok, "state_dirs", []),
     total_count: int(get(r.ok, "total_count", 0)),
     peers: ps,
     error: get(r.ok, "error", ""),

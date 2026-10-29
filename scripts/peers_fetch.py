@@ -43,6 +43,10 @@ import urllib.request
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENV = os.path.join(ROOT, ".env")
 OUT = os.path.join(ROOT, ".data", "peers.json")
+# A2A 任务与审计的来源节点(通常是 blog)。用 PEER_STATE_DIRS 指定多个,
+# 逗号分隔; 每个目录里应有 a2a-tasks/ 与 a2a-audit.jsonl。
+# 为什么要它: 任务状态与审计是**执行方**写的, 看板在另一台/另一仓,
+# 只能按目录读 —— 这正是"谁有权限谁采集"的延续。
 
 
 def load_env() -> dict:
@@ -58,15 +62,27 @@ def load_env() -> dict:
     except FileNotFoundError:
         pass
     for k in ("PEER_SHARED", "PEER_TARGETS", "PEER_TARGET_TIMEOUT",
-              "PEER_STALE_SECS", "PEER_NAME"):
+              "PEER_STALE_SECS", "PEER_NAME", "PEER_STATE_DIRS", "PEER_ROOT"):
         if os.environ.get(k):
             vals[k] = os.environ[k]
     return vals
 
 
+# 身份模式: 配了 PEER_ROOT 就按节点派生密钥签名(与 lume-core/lib/identity.lume
+# 一致)。不这样做的话, 对端一旦启用身份层, 探测就全部 401 —— 而 UI 上只显示
+# "不可达", 看不出是身份问题。
+PEER_ROOT = ""
+
+
+def key_for(node: str) -> str:
+    return hmac.new(PEER_ROOT.encode(), f"peer:{node}".encode(),
+                    hashlib.sha256).hexdigest()
+
+
 def sign(shared: str, node: str, ts: str, nonce: str, scope: str) -> str:
     msg = "\n".join([node, ts, nonce, scope]).encode()
-    return hmac.new(shared.encode(), msg, hashlib.sha256).hexdigest()
+    key = key_for(node) if PEER_ROOT else shared
+    return hmac.new(key.encode(), msg, hashlib.sha256).hexdigest()
 
 
 def signed_url(shared: str, node: str, base: str, path: str) -> str:
@@ -134,9 +150,98 @@ def probe_one(shared: str, node: str, target: str, timeout: float) -> dict:
     return entry
 
 
+AUDIT_TAIL = 200          # 审计只取尾部: 全量可能几 MB, 看板只要最近几条
+
+
+def scan_tasks(state_dirs) -> list:
+    """扫各来源目录下的 a2a-tasks/*.json, 汇总成待办与最近完成。
+
+    只取 UI 需要的字段, 不把整个任务(含 history/payload)塞给前端 ——
+    任务里可能有别家应用的数据, 看板没必要也不应该全部拿到。
+    """
+    out = []
+    for d in state_dirs:
+        tdir = os.path.join(d, "a2a-tasks")
+        if not os.path.isdir(tdir):
+            continue
+        for fn in sorted(os.listdir(tdir)):
+            if not fn.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(tdir, fn), encoding="utf-8") as f:
+                    t = json.load(f)
+            except (OSError, ValueError):
+                continue
+            st = t.get("status") or {}
+            state = str(st.get("state", ""))
+            if state in ("completed", "failed", "canceled", "rejected"):
+                continue      # 终结态不进取数(否则列表会被历史淹掉)
+            payload = (t.get("metadata") or {}).get("payload") or {}
+            chain = payload.get("_chain") or []
+            approvals = payload.get("_approvals") or []
+            out.append({
+                "id": str(t.get("id", "")),
+                "state": state,
+                "tool": str(payload.get("tool", "")),
+                "target": str(payload.get("target", "")),
+                "domain": str(payload.get("domain", "")),
+                "policy": [{"role": str(c.get("role", "")),
+                            "node": str(c.get("node", "")),
+                            "stage": str(c.get("stage", ""))}
+                           for c in chain if isinstance(c, dict)],
+                "approved": [str(a.get("role", "")) for a in approvals
+                             if isinstance(a, dict)],
+                # 当前该谁审: 由 lume 侧的 message 给出人话, 这里不重复推导
+                "waiting_for": str(((st.get("message") or {}).get("parts") or [{}])[0]
+                                   .get("text", ""))[:160],
+                "since": int(st.get("timestamp") or 0),
+                "source": os.path.basename(os.path.dirname(d)),
+            })
+    out.sort(key=lambda x: x.get("since") or 0, reverse=True)
+    return out
+
+
+def scan_audit(state_dirs, limit: int = AUDIT_TAIL) -> list:
+    """读审计尾部。JSONL 每行一条; 坏行跳过(审计文件可能是半截写入)。"""
+    rows = []
+    for d in state_dirs:
+        path = os.path.join(d, "a2a-audit.jsonl")
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                lines = f.readlines()[-limit:]
+        except OSError:
+            continue
+        src = os.path.basename(os.path.dirname(d))
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            rows.append({
+                "at": int(e.get("at") or 0),
+                "event": str(e.get("event", "")),
+                "task_id": str(e.get("task_id", "")),
+                "role": str(e.get("role") or e.get("by_role") or ""),
+                "required_role": str(e.get("required_role", "")),
+                "claimed_role": str(e.get("claimed_role", "")),
+                "decision": str(e.get("decision") or e.get("state") or ""),
+                "reason": str(e.get("reason", ""))[:120],
+                "source": src,
+            })
+    rows.sort(key=lambda x: x.get("at") or 0, reverse=True)
+    return rows[:limit]
+
+
 def main() -> int:
     env = load_env()
+    global PEER_ROOT
     shared = (env.get("PEER_SHARED") or "").strip()
+    PEER_ROOT = (env.get("PEER_ROOT") or "").strip()
     node = (env.get("PEER_NAME") or "lume-lan").strip()
     targets = [t.strip() for t in (env.get("PEER_TARGETS") or "").split(",") if t.strip()]
     try:
@@ -145,29 +250,43 @@ def main() -> int:
         timeout = 5.0
 
     peers = []
-    if shared and targets:
+    if (shared or PEER_ROOT) and targets:
         for target in targets:
             peers.append(probe_one(shared, node, target, timeout))
 
+    # A2A 任务与审计: 从 PEER_STATE_DIRS 指定的目录读(执行方写, 看板读)
+    state_dirs = []
+    for d in (env.get("PEER_STATE_DIRS") or "").split(","):
+        d = d.strip()
+        if not d:
+            continue
+        state_dirs.append(d if os.path.isabs(d) else os.path.join(ROOT, d))
+
     payload = {
-        "enabled": bool(shared),
+        "enabled": bool(shared or PEER_ROOT),
         "fetched_at": int(time.time()),
         # 统一数据源状态契约(与 devices/router/dns 一致)
         "reachable": True,          # 宿主本机能写快照即可达
         "stale": False,
-        "error": "" if shared else "未配置 PEER_SHARED, peer 探测未启用",
+        "error": "" if (shared or PEER_ROOT) else "未配置 PEER_SHARED / PEER_ROOT, peer 探测未启用",
         "targets": targets,
         "peers": peers,
         "up_count": sum(1 for p in peers if p["reachable"]),
         "total_count": len(peers),
+        # 待办审批(非终结态任务) + 审计尾部。没有配置来源时两者都是空数组,
+        # 前端据此显示"未配置"而不是"没有数据"。
+        "pending": scan_tasks(state_dirs),
+        "audit": scan_audit(state_dirs),
+        "state_dirs": state_dirs,
     }
 
+    # 直接覆盖写, 不经过 rename —— 与其它采集脚本(a2a_tasks/worker)一致:
+    # 读侧读到半截 JSON 时会当"损坏"降级, 下一轮自然恢复, 比两边策略不同
+    # 更好推理。
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    tmp = OUT + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
+    with open(OUT, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, OUT)
+    os.chmod(OUT, 0o600)
     print(f"wrote {OUT}: {payload['up_count']}/{payload['total_count']} peer(s) reachable")
     return 0
 

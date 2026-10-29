@@ -184,6 +184,40 @@ export interface PeerNode {
   fetched_at?: number;
   latency_ms?: number;
 }
+/** 审批链上的一关(来自任务的 metadata.payload._chain) */
+export interface ApprovalStage {
+  stage: string;   // first | second | final
+  role: string;
+  node: string;
+}
+
+/** 一条待办审批(非终结态的 A2A 任务) */
+export interface PendingTask {
+  id: string;
+  state: string;          // submitted | working | input-required
+  tool: string;
+  target: string;
+  domain: string;
+  policy: ApprovalStage[];
+  approved: string[];     // 已通过的角色
+  waiting_for: string;    // 当前该谁审(执行方给的人话)
+  since: number;
+  source: string;
+}
+
+/** 一条审计记录(a2a-audit.jsonl 尾部) */
+export interface AuditRow {
+  at: number;
+  event: string;          // approval_required | approval_denied | approval_step | ...
+  task_id: string;
+  role: string;
+  required_role: string;
+  claimed_role: string;
+  decision: string;
+  reason: string;
+  source: string;
+}
+
 export interface PeersPayload {
   available: boolean;
   /** 是否配了 PEER_SHARED; false 时整个 peer 面未启用 */
@@ -196,6 +230,12 @@ export interface PeersPayload {
   up_count?: number;
   total_count?: number;
   peers?: PeerNode[];
+  /** 待办审批(非终结态任务), 按时间倒序 */
+  pending?: PendingTask[];
+  /** 审计尾部 */
+  audit?: AuditRow[];
+  /** 采集读取的 a2a 状态目录(未配置时为空) */
+  state_dirs?: string[];
   error?: string;
   note?: string;
 }

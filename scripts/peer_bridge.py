@@ -75,6 +75,15 @@ TARGETS = [t.strip() for t in (os.environ.get("PEER_TARGETS") or "").split(",") 
 # PEER_EXPOSE=readonly      默认: 按下面 DENY 名单过滤
 # PEER_EXPOSE=key1,key2     白名单: 只暴露名字里含任一关键字的工具
 EXPOSE = (os.environ.get("PEER_EXPOSE") or "readonly").strip().lower()
+# 委派最大跳数。0 或不合法 -> 2。
+# 与对端(peer_node.lume 的 PEER_MAX_HOPS)保持同一个默认值: 两边不一致时,
+# 由更严的那侧生效(对端会先拒), 但显示给 agent 的"N/M"会误导 —— 所以对齐。
+try:
+    MAX_HOPS = int(os.environ.get("PEER_MAX_HOPS") or 2)
+except ValueError:
+    MAX_HOPS = 2
+if MAX_HOPS < 1:
+    MAX_HOPS = 1
 
 # 写/破坏性动作的命名特征。宁可多拦: 漏掉一个写工具的代价远大于多拦一个读工具。
 DENY_TOKENS = (
@@ -84,7 +93,18 @@ DENY_TOKENS = (
 )
 
 
-def tool_allowed(tool_name: str) -> bool:
+def tool_allowed(tool_name: str, peer_callable=None) -> bool:
+    """客户端侧的工具可见性。
+
+    peer_callable 来自对端 /peer/tools 的标注（服务端策略的结论）。有它就用它
+    —— 服务端才是权威：它知道自己配了哪些 MCP、哪些被策略拦下。客户端再维护
+    一份 DENY_TOKENS 只会和服务端漂移，漂移的方向通常是"客户端以为能调、
+    服务端拒绝"，表现为 agent 反复试一个永远失败的工具。
+
+    没有该字段时（旧版对端）退回本地词表，保持兼容。
+    """
+    if peer_callable is False:
+        return False
     if EXPOSE == "all":
         return True
     low = tool_name.lower()
@@ -169,7 +189,7 @@ def discover_apps() -> list:
             name = str(t.get("name", "")).strip()
             if not name:
                 continue
-            if not tool_allowed(name):
+            if not tool_allowed(name, t.get("peer_callable")):
                 filtered_off.append(f"{node}__{name}")
                 continue
             kept.append({
@@ -190,6 +210,33 @@ def discover_apps() -> list:
     return apps
 
 
+def probe_agents() -> dict:
+    """哪些节点背后有能问答的 agent。返回 {node: {target, site}}。
+
+    为什么要先探 /peer/agent 而不是直接给每个节点都挂一个 ask 工具:
+      * 纯数据节点(博客)没有这条路由, 给了工具 agent 会去调, 拿到 404 ——
+        agent 会反复重试或换着问, 白白烧几轮(token 与延迟都是成本);
+      * 提示词里挂一堆"叫了也没用"的工具, 会稀释真正有用的那些。
+    所以只有真的能应答的节点才出现在工具表里。
+    """
+    out = {}
+    for target in TARGETS:
+        if not SHARED:
+            continue
+        ok, payload = call("http://" + target, "/peer/agent")
+        if not ok or not payload.get("ok"):
+            continue
+        if not payload.get("agent_ok"):
+            continue
+        node = str(payload.get("node") or target).strip() or target
+        out[node] = {
+            "target": target,
+            "site": str(payload.get("site") or "").strip(),
+            "endpoint": str(payload.get("endpoint") or "").strip(),
+        }
+    return out
+
+
 def discover() -> list:
     """把每个节点的工具聚合成一张列表（每次 tools/list 都重新发现，
     这样对端新起的节点/新加的工具不用重启本桥就能被看到）。"""
@@ -208,7 +255,7 @@ def discover() -> list:
             name = str(t.get("name", "")).strip()
             if not name:
                 continue
-            if not tool_allowed(name):
+            if not tool_allowed(name, t.get("peer_callable")):
                 filtered_off.append(f"{node}__{name}")
                 continue
             desc = str(t.get("desc", "")).strip()
@@ -279,18 +326,98 @@ def handle(req) -> None:
                             "<应用名>__<工具名> 形式的工具。"),
             "inputSchema": {"type": "object", "properties": {}},
         }]
-        tools += [tool_schema(d["name"], d["description"]) for d in found]
-        # 把被策略拦下的工具作为一条只读"说明工具"暴露给 agent —— 让它知道
-        # 「存在但被禁用」, 而不是以为对端没有这些能力而绕路或编造。
-        if filtered_off:
+        # ---- 工具全量暴露(两段式加载试过, 回滚了) ----
+        #
+        # 曾按 skills 的思路改成: tools/list 只给每个应用一个 <node>__use
+        # (返回该应用的目录), agent 读过之后再调具体工具。想法是让上下文
+        # 随节点数不增长。
+        #
+        # **实测不可行**(2026-10-30): agent 会反复调用 <node>__use 本身, 并给它
+        # 塞 {"tool": "crm.stats"} 之类的参数, 拿回同一份目录后重试 ——
+        # 连调 4 次 __use + 5 次 think, 始终不改成调用 name 里那个真正干活的
+        # 工具, 2 分半耗尽轮数超时。改了描述(明确写"只返回说明, 请改为调用
+        # 清单里的名字")也没用。
+        #
+        # 结论: 两段式依赖 agent"读完目录主动换工具名", 当前模型做不到;
+        # 它倾向重复调用名字看起来最相关的那个。skills 之所以可行, 是因为
+        # skill 的加载由 harness 完成(模型只读文本), 不需要模型自己切换调用目标。
+        #
+        # 所以维持全量暴露。工具数真到几十个时, 更可行的方向是**在 bridge 侧
+        # 按问题裁剪**(只暴露与本次问题相关的应用), 而不是让模型做两段跳。
+        # ---- 按应用聚合: 一个应用一个工具, 用 action 选具体操作 ----
+        #
+        # 为什么是这个方案, 而不是"两段式加载(tools/list 只给目录)":
+        #
+        #   * MCP 的 tools/list **不带任何参数**(agent-httpd 那边传的是 NULL,
+        #     且只在启动时调一次), 所以 bridge 根本拿不到用户问题 —— 想"按问题
+        #     裁剪"没有信息可用。
+        #   * 两段式(先 __use 拿目录再调具体工具)实测失败: agent 会反复调用
+        #     __use 本身并塞 {"tool":"x"}, 4 次后仍在原地, 2 分半超时。
+        #     它要求模型**读完说明后主动改换调用目标**, 当前模型做不到。
+        #
+        # 聚合是纯接口设计, 不需要模型做任何"跳转":
+        #   原来: 每个应用 2-3 个工具 → 3 个应用 8 个工具
+        #   现在: 每个应用 1 个工具, action 枚举具体操作 → 3 个工具
+        # agent 仍然是"选一个工具 + 填参数", 与 skills 的加载方式同构 ——
+        # 系统把选项收敛好, 模型只需选。
+        #
+        # 具体的 <node>__<tool> 名字**仍然有效**(见 tools/call 的通用分发),
+        # 所以老的调用方式、审计记录、文档都不会失效。
+        apps = discover_apps()
+        for a in apps:
+            if not a["reachable"] or not a["tools"]:
+                continue
+            node = a["node"]
+            acts = [t["raw"] for t in a["tools"]]
+            hint = "; ".join(
+                f"{t['raw']}={t['desc'] or t['raw']}" + (f"（{t['when']}）" if t["when"] else "")
+                for t in a["tools"]
+            )
+            desc = (a["summary"] or f"{node} 应用") + \
+                   f" 用 action 指定具体操作, 可选: " + "; ".join(acts) + "。" + \
+                   f" 各操作含义: " + hint
             tools.append({
-                "name": "_peers__blocked",
-                "description": (f"只读策略拦下了 {len(filtered_off)} 个写/破坏性工具, "
-                                f"它们不在本次工具表里。清单: "
-                                + ", ".join(filtered_off[:20])
-                                + (" …" if len(filtered_off) > 20 else "")
-                                + "（如需放开, 设 PEER_EXPOSE=all 或白名单）"),
-                "inputSchema": {"type": "object", "properties": {}},
+                "name": f"{node}__query",
+                "description": desc,
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": acts,
+                            "description": "要执行的具体操作（从可选列表里选一个）",
+                        },
+                        "arguments": {
+                            "type": "object",
+                            "description": "该操作的参数对象（多数操作可省略）",
+                        },
+                    },
+                    "required": ["action"],
+                },
+            })
+        # ---- 委派层: 问对端的 agent ----
+        # 与上面那些 <node>__<tool> 的本质区别: 那些是"取数据"(对端执行一条
+        # 查询就返回), 这个是"请求判断"(对端自己决定查什么、怎么答)。
+        # 只对真正有 agent 的节点暴露 —— 纯数据节点没有这条路由, 给了工具
+        # agent 会去调, 拿到 404 后反复重试。
+        for node, info in probe_agents().items():
+            site = info["site"] or node
+            tools.append({
+                "name": f"{node}__ask",
+                "description": (
+                    f"向 {site}（节点 {node}）的 agent 提问，由**它自己**决定查什么、"
+                    f"怎么答。适合需要该应用专业判断的问题，例如"
+                    f"「这批数据里有哪些异常」「哪些值得关注」。"
+                    f"只想要一个数字时用 {node}__<工具名> 更快——委派要多一次模型调用。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string",
+                                     "description": "要问对方 agent 的问题，自然语言即可"},
+                    },
+                    "required": ["question"],
+                },
             })
         send({"jsonrpc": "2.0", "id": mid, "result": {"tools": tools}})
         return
@@ -300,49 +427,94 @@ def handle(req) -> None:
         want = str(params.get("name") or "")
         args = params.get("arguments") or {}
 
-        # 找到这个 name 属于哪个节点（重新发现一次，避免拿到过期映射）
-        if want == "_peers__discover":
-            apps = discover_apps()
-            if not apps:
-                txt = "当前没有可访问的 peer 应用（未配置 PEER_SHARED/PEER_TARGETS，或对端都不可达）。"
-            else:
-                parts = []
-                for a in apps:
-                    if not a["reachable"]:
-                        parts.append(f"## {a['node']}（不可达：{a['error']}）")
-                        continue
-                    title = f"## {a['node']}" + (f" — {a['site']}" if a["site"] else "")
-                    body = [title]
-                    if a["summary"]:
-                        body.append(a["summary"])
-                    for t in a["tools"]:
-                        # 发现层只给**摘要**: desc 可能是一大段英文(think__ 那种
-                        # 上千字符), 全塞进来会吃光上下文。细节留在工具自身的
-                        # description 里, agent 真要调时再看到。
-                        d = t["desc"]
-                        if len(d) > 80:
-                            d = d[:77] + "…"
-                        line = f"- {t['name']}：{d}"
-                        if t["when"]:
-                            line += f"（何时用：{t['when']}）"
-                        body.append(line)
-                    parts.append("\n".join(body))
-                txt = "\n\n".join(parts)
-                if filtered_off:
-                    txt += (f"\n\n注：{len(filtered_off)} 个写/破坏性工具已按只读策略隐藏。")
+        # ---- 聚合入口: <node>__query ----
+        # 按 action 参数转成对端的 <node>__<tool> 调用。这条路径让 agent
+        # 只需"选一个工具 + 填 action", 不必在多应用的工具名之间挑。
+        if want.endswith("__query"):
+            node = want[: -len("__query")]
+            action = str(args.get("action") or "").strip()
+            if not action:
+                send({"jsonrpc": "2.0", "id": mid, "result": {
+                    "content": [{"type": "text", "text":
+                        f"缺少 action。{node} 可用的操作见该工具的 action 枚举。"}],
+                    "isError": True}})
+                return
+            # 校验 action 确实是该应用声明过的工具 —— 否则这里就成了
+            # "打穿到对端任意工具"的跳板(和 <node>__<tool> 的白名单同理)。
+            app = {a["node"]: a for a in discover_apps()}.get(node)
+            valid = {t["raw"] for t in (app or {}).get("tools", [])}
+            if action not in valid:
+                send({"jsonrpc": "2.0", "id": mid, "result": {
+                    "content": [{"type": "text", "text":
+                        f"{node} 没有声明操作 '{action}'。可选: " + ", ".join(sorted(valid))}],
+                    "isError": True}})
+                return
+            # 转成通用分发: 复用 <node>__<tool> 那条路径
+            want = f"{node}__{action}"
+            args = args.get("arguments") or {}
+
+        # ---- 委派: <node>__ask ----
+        # 形如 "scanner__ask"。注意不能和 discover() 的名字撞: 那边是
+        # "<node>__<tool>", 这里多一个保留后缀 ask。
+        if want.endswith("__ask"):
+            node = want[: -len("__ask")]
+            agents = probe_agents()
+            info = agents.get(node)
+            if not info:
+                send({"jsonrpc": "2.0", "id": mid, "result": {
+                    "content": [{"type": "text", "text":
+                        f"{node} 目前没有可用的 agent（节点不可达, 或它的 "
+                        f"agent-httpd 未启动）。改用 {node}__<工具名> 直接取数据。"}],
+                    "isError": True,
+                }})
+                return
+            q = str(args.get("question") or "").strip()
+            if not q:
+                send({"jsonrpc": "2.0", "id": mid, "result": {
+                    "content": [{"type": "text", "text": "缺少 question 参数。"}],
+                    "isError": True,
+                }})
+                return
+            # 跳数预算: 带上 hop(已委派次数) 与 trace(经过的节点)。
+            #
+            # 为什么主 agent 侧也要记: 对端只能看到"我这一跳进来时的计数",
+            # 它无法知道更上游转过几次。所以发起方每委派一次就把 hop+1、
+            # 把自己的名字追加进 trace —— 对端据此判断"是不是已经成环"。
+            #
+            # 默认从 1 开始(本次就是第 1 跳); 对端再委派时会是 2。
+            my_name = NODE
+            req_body = {
+                "question": q,
+                "hop": 1,
+                "trace": [my_name],
+            }
+            ok, payload = call("http://" + info["target"], "/peer/ask",
+                               json.dumps(req_body, ensure_ascii=False))
+            if not ok or not payload.get("ok"):
+                err = payload.get("error") or ("不可达" if not ok else "对端拒绝")
+                send({"jsonrpc": "2.0", "id": mid, "result": {
+                    "content": [{"type": "text", "text":
+                        f"向 {node} 的 agent 提问失败: {err}"}],
+                    "isError": True,
+                }})
+                return
+            answer = str(payload.get("answer") or "").strip() or "(对端返回空回答)"
+            # 把对方的**工具调用痕迹**一并带回来: 主 agent 据此能判断
+            # "这个结论是基于哪些数据得出的", 而不是转述一个黑箱结论。
+            notes = [str(n) for n in (payload.get("notes") or [])]
+            text = answer
+            if notes:
+                text += "\n\n[对方调用的工具] " + "; ".join(notes[:10])
+            # 把跳数/链路也回给 agent: 它能看到"这次委派走到了第几跳",
+            # 于是不会在接近上限时还继续转派。
+            hop_used = payload.get("hop")
+            if hop_used is not None:
+                text += f"\n\n[委派跳数] {hop_used}/{MAX_HOPS}"
             send({"jsonrpc": "2.0", "id": mid, "result": {
-                "content": [{"type": "text", "text": txt}], "isError": False,
+                "content": [{"type": "text", "text": text}], "isError": False,
             }})
             return
 
-        if want == "_peers__blocked":
-            send({"jsonrpc": "2.0", "id": mid, "result": {
-                "content": [{"type": "text", "text":
-                             "这是说明性条目, 不是可调用工具。被拦下的写操作: "
-                             + ", ".join(filtered_off[:40])}],
-                "isError": False,
-            }})
-            return
         hit = next((d for d in discover() if d["name"] == want), None)
         if not hit:
             send({"jsonrpc": "2.0", "id": mid, "result": {

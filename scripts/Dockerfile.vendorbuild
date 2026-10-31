@@ -1,0 +1,41 @@
+# 用当前源码重编静态 Linux lume, 供 lume-lan/vendor/ 使用。
+#
+# 与 lume/Dockerfile.scanner 的构建阶段同款参数 —— 那边已经在用同一套参数
+# 产生产品镜像, 复用可以保证"测试台跑的 lume"和"线上跑的 lume"编译口径一致。
+#
+# 构建上下文 = lume/lume/(该树的 .dockerignore 已排除 build/ bin/ *.o *.a)。
+# 产物: /pkg.tgz, 内含 lume-linux-<arch>-static/lume 单个静态二进制。
+FROM debian:bookworm-slim AS lume-build
+
+# gcc + 静态链接所需:
+#   libcrypt   → Basic Auth 的 crypt(3)
+#   libsqlite3 → 原生 SQL 工具
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        gcc libc6-dev libcrypt-dev libsqlite3-dev make m4 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build/lume
+COPY . .
+
+# 必须先清掉宿主的 agent-httpd 构建产物: 否则会链上宿主架构(.o/.a)而非容器内重编的,
+# 静态链接阶段报架构不匹配 —— 这个坑在 scanner 的 Dockerfile 里已经踩过。
+RUN rm -rf agent-httpd/bin agent-httpd/build && make all \
+        CFLAGS_EXTRA="-D_GNU_SOURCE -DHAVE_CRYPT -DHAVE_CRYPT_H \
+                      -ffunction-sections -fdata-sections \
+                      -Wno-format-truncation -Wno-stringop-truncation" \
+        LDFLAGS_EXTRA="-lcrypt -lm -static -Wl,--gc-sections"
+
+# 检查修复是否真的进了产物: 只靠"编译成功"不足以证明源码改到了这一份。
+RUN strings bin/lume | grep -q "TLS warmup" \
+    || { echo "ERROR: 产物缺少 lume_http_warmup (TLS 预热), 源码可能不是最新" >&2; exit 1; }
+
+FROM debian:bookworm-slim
+ARG VENDOR_ARCH=arm64
+COPY --from=lume-build /build/lume/bin/lume /tmp/lume
+RUN mkdir -p /pkg/lume-linux-${VENDOR_ARCH}-static \
+    && cp /tmp/lume /pkg/lume-linux-${VENDOR_ARCH}-static/lume \
+    && chmod 0755 /pkg/lume-linux-${VENDOR_ARCH}-static/lume \
+    && tar -czf /pkg.tgz -C /pkg lume-linux-${VENDOR_ARCH}-static
+
+CMD ["/bin/sh", "-c", "cp /pkg.tgz /export/ && echo exported"]

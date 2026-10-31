@@ -12,9 +12,18 @@
      MAC 去比, 命中即判泄漏。.data/ 是宿主私有数据, 只在本地跑得出来。
 
 用法:
-  python3 scripts/check_privacy.py            # 扫 git 跟踪的文件(硬规则)
+  python3 scripts/check_privacy.py            # 跟踪的 + 未跟踪的(硬规则)
   python3 scripts/check_privacy.py --local    # 再叠本机实况比对
   python3 scripts/check_privacy.py --staged   # 只看暂存区(git hook 用)
+  python3 scripts/check_privacy.py --tracked  # 只看已跟踪(旧行为)
+  python3 scripts/check_privacy.py --root DIR # 扫指定目录(测试用)
+
+为什么默认要扫未跟踪文件:
+  2026-10 的一批改动里, 31 个新增文件从来没被本脚本看过 —— 因为旧实现只跑
+  `git ls-files`。而「新写的文件」恰恰是最容易把真实网段/IP 写进去的地方
+  (复制一段实测记录、贴一条 curl 命令)。只查已跟踪文件, 等于在提交那一刻
+  才第一次看到内容, 那时发现问题已经晚了。
+  未跟踪文件同样尊重 .gitignore: 被忽略的(审计日志/.runtime)不该报。
 
 退出码: 0 = 通过; 1 = 发现疑似泄漏(附文件:行号)。
 """
@@ -24,6 +33,8 @@ import re
 import subprocess
 import sys
 
+# 扫描根目录。默认是本仓库根；--root 可指向别处 —— 唯一用途是让测试
+# 在临时目录里造场景（否则测扫描范围就得往真仓库里写泄露样本）。
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # 允许的「保留/示例」值 —— 这些出现是正常的, 不算泄漏。
@@ -71,20 +82,50 @@ def is_private(ip: str) -> bool:
     return (a == 10 or (a == 172 and 16 <= b <= 31) or (a == 192 and b == 168))
 
 
-def tracked_files(staged: bool):
-    if staged:
-        out = subprocess.run(["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
-                             cwd=ROOT, capture_output=True, text=True).stdout
-    else:
-        out = subprocess.run(["git", "ls-files"], cwd=ROOT,
-                             capture_output=True, text=True).stdout
-    for line in out.splitlines():
+def _emit(lines):
+    """过滤并逐个产出相对路径。"""
+    for line in lines:
         line = line.strip()
         if not line or line.endswith(SKIP_SUFFIX):
             continue
         if any(d in line for d in SKIP_DIRS):
             continue
         yield line
+
+
+def untracked_files():
+    """未被 .gitignore 忽略、也还没入库的文件。
+
+    用 --exclude-standard 让 git 自己应用 .gitignore: 我们想要的正是
+    "下次 git add . 会带进去的东西"。已经在 .gitignore 里的(审计日志、
+    .runtime)不报 —— 它们不会进仓库, 报警只会制造噪音。
+    """
+    out = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=ROOT, capture_output=True, text=True).stdout
+    return _emit(out.splitlines())
+
+
+def tracked_files(staged: bool, include_untracked: bool = True):
+    if staged:
+        out = subprocess.run(["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
+                             cwd=ROOT, capture_output=True, text=True).stdout
+        for f in _emit(out.splitlines()):
+            yield f
+        return
+
+    out = subprocess.run(["git", "ls-files"], cwd=ROOT,
+                         capture_output=True, text=True).stdout
+    seen = set()
+    for f in _emit(out.splitlines()):
+        seen.add(f)
+        yield f
+
+    if include_untracked:
+        for f in untracked_files():
+            if f not in seen:
+                seen.add(f)
+                yield f
 
 
 def load_local_facts():
@@ -110,12 +151,24 @@ def load_local_facts():
 
 
 def main(argv):
+    global ROOT
+    # --root <dir>：把扫描根指到别处（测试用）。必须在其他判断之前处理，
+    # 因为后面所有 git 调用都以 ROOT 为 cwd。
+    if "--root" in argv:
+        i = argv.index("--root")
+        if i + 1 >= len(argv):
+            print("✗ --root 需要一个目录参数", file=sys.stderr)
+            return 2
+        ROOT = os.path.abspath(argv[i + 1])
+
     staged = "--staged" in argv
     use_local = "--local" in argv
+    # 默认含未跟踪文件（见文件头的说明）；--tracked 可退回旧行为。
+    include_untracked = "--tracked" not in argv
     facts = load_local_facts() if use_local else {"ips": set(), "macs": set(), "net": ""}
 
     problems = []
-    for rel in tracked_files(staged):
+    for rel in tracked_files(staged, include_untracked):
         path = os.path.join(ROOT, rel)
         try:
             text = open(path, encoding="utf-8", errors="replace").read()
@@ -152,7 +205,12 @@ def main(argv):
                     problems.append((rel, no, f"非示例 MAC: {norm}"))
 
     if not problems:
-        scope = "暂存区" if staged else "已跟踪文件"
+        if staged:
+            scope = "暂存区"
+        elif include_untracked:
+            scope = "已跟踪 + 未跟踪文件"
+        else:
+            scope = "仅已跟踪文件"
         extra = " + 本机实况比对" if use_local else ""
         print(f"✓ 隐私检查通过（{scope}{extra}）")
         return 0

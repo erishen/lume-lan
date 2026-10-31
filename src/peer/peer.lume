@@ -1,0 +1,131 @@
+// peer.lume — lume 节点间点对点通讯(跨机, 局域网)
+//
+// 用途: 让部署在两台机器上的 lume agent 互相探测、交换状态、转发 agent 提问。
+//
+// ── 设计约束(2026-10-28 实测确认, 不是假设) ──────────────────────────
+// 1. lume 的 route handler 拿不到请求头 —— req 只有 method / path / query /
+//    query_params / params / body / session。所以**不能用 X-Peer-Key 这类头做认证**,
+//    凭据只能走 query 或 body。
+// 2. req.path **包含 query 串**(实测 /a?x=1 → path="/a?x=1")。路由匹配由框架负责,
+//    但自己做 scope 时要剥掉 query。
+// 3. GET 请求 req.body 为 null, 一律用 get(req, "body", "") 读。
+// 4. 出站 http_get/http_post 默认被 SSRF 闸门拦私有地址, 跨机必须
+//    allow_private: true, 否则报错长得像「节点离线」(实为本地拦截)。
+// 5. lume 的 http_* 是**收完整 body 才返回**, 不是流式 —— 对 SSE 端点只能整体收。
+//
+// ── 认证: HMAC-SHA256 + 时间戳 + nonce ──────────────────────────────
+//   sig = hmac_sha256(PEER_SHARED, node \n ts \n nonce \n scope)
+//   scope 把签名绑到具体动作, 防止挪用:
+//     GET  : "GET "     + path_only
+//     POST : "POST "    + path_only + "\n" + body
+//   签名放 query(node/ts/nonce/sig), 因为 header 拿不到。
+//
+// ── 注意: 局域网明文 HTTP ───────────────────────────────────────────
+//   lume 的 http_* 不支持自定义 CA, 内网自签证书走不通; 所以跨机是明文 HTTP。
+//   签名保证「不可伪造/不可篡改/不可重放」, 但**不加密**载荷。
+//   因此: 不要经 peer 通道传密码/密钥/证件号等敏感串, 只传状态与任务指令。
+
+// ── 配置 ────────────────────────────────────────────────────────────
+let peer_key = env("PEER_SHARED");
+if (peer_key == null) { peer_key = ""; }
+let peer_name = env("PEER_NAME");
+if (peer_name == null) { peer_name = "lume-node"; }
+let peer_skew = env("PEER_SKEW_SECS");
+if (peer_skew == null) { peer_skew = "120"; }
+
+// ── 字符串工具(只用文档确认存在的内建) ──────────────────────────────
+
+// 取前 n 个字节。str_match 的 {0,n} 是**字节**还是字符取决于实现, 这里只用于
+// hex 截断(纯 ASCII), 所以无歧义。
+export func prefix_of(s: string, n: int): string {
+  let rows = str_match("^(.{0," + str(n) + "})", s);
+  if (len(rows) == 0) { return ""; }
+  let g = get(get(rows, 0, null), "groups", []);
+  if (len(g) == 0) { return ""; }
+  return str(get(g, 0, ""));
+}
+
+// 取路径部分(剥掉 query): "/peer/x?a=1" → "/peer/x"
+export func path_only(p: string): string {
+  let rows = str_match("^([^?]*)", p);
+  if (len(rows) == 0) { return p; }
+  let g = get(get(rows, 0, null), "groups", []);
+  if (len(g) == 0) { return p; }
+  return str(get(g, 0, p));
+}
+
+// 常量时间比较: 长度不同直接 false(对 hex 签名长度固定, 不泄漏有效信息);
+// 相同则全程累积 XOR, 不提前 return —— 避免按字节提前退出泄漏前缀。
+// 逐字符比较用 str_match 抓单字符再比 (没有 byte_at)。
+export func const_eq(a: string, b: string): bool {
+  if (len(a) != len(b)) { return false; }
+  if (len(a) == 0) { return true; }
+  let i = 0;
+  let diff = 0;
+  while (i < len(a)) {
+    let ca = str_match("^(.{" + str(i) + "})(.)", a);
+    let cb = str_match("^(.{" + str(i) + "})(.)", b);
+    let ga = get(get(ca, 0, null), "groups", []);
+    let gb = get(get(cb, 0, null), "groups", []);
+    let xa = str(get(ga, 1, ""));
+    let xb = str(get(gb, 1, ""));
+    if (xa != xb) { diff = diff + 1; }
+    i = i + 1;
+  }
+  return diff == 0;
+}
+
+export func sign(node: string, ts: string, nonce: string, scope: string): string {
+  return hmac_sha256(peer_key, node + "\n" + ts + "\n" + nonce + "\n" + scope);
+}
+
+func qp(req, k: string): string {
+  let q = get(req, "query_params", {});
+  let v = get(q, k, "");
+  if (v == null) { return ""; }
+  return str(v);
+}
+
+// ── 入站校验 → { ok, error, node } ──────────────────────────────────
+// 「配置缺失」放最前: 没配 PEER_SHARED 时整面关闭, 而不是放行。
+export func verify(req, method: string, scope: string) {
+  if (len(peer_key) == 0) {
+    return { ok: false, error: "peer disabled: PEER_SHARED not set" };
+  }
+  let node = qp(req, "node");
+  let ts = qp(req, "ts");
+  let nonce = qp(req, "nonce");
+  let sig = qp(req, "sig");
+  if (len(node) == 0 || len(ts) == 0 || len(nonce) == 0 || len(sig) == 0) {
+    return { ok: false, error: "missing auth params (node/ts/nonce/sig)" };
+  }
+  let ts_i = int(ts);
+  if (ts_i <= 0) { return { ok: false, error: "bad ts" }; }
+  let drift = int(now()) - ts_i;
+  if (drift < 0) { drift = 0 - drift; }
+  if (drift > int(peer_skew)) {
+    return { ok: false, error: "ts outside window (" + str(drift) + "s)" };
+  }
+  let expect = sign(node, ts, nonce, scope);
+  if (!const_eq(expect, sig)) {
+    return { ok: false, error: "bad signature" };
+  }
+  return { ok: true, error: "", node: node };
+}
+
+// ── 出站: 生成带签名的完整 URL ───────────────────────────────────────
+export func signed_url(host: string, path: string, body: string): string {
+  let method = "GET";
+  if (len(body) > 0) { method = "POST"; }
+  let ts = str(int(now()));
+  let nonce = prefix_of(sha256(peer_name + ts + str(int(now()) * 31)), 32);
+  let scope = method + " " + path;
+  if (len(body) > 0) { scope = scope + "\n" + body; }
+  let sig = sign(peer_name, ts, nonce, scope);
+  return "http://" + host + path +
+         "?node=" + peer_name + "&ts=" + ts + "&nonce=" + nonce + "&sig=" + sig;
+}
+
+export func node_info() {
+  return { name: peer_name, ts: int(now()) };
+}

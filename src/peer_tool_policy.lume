@@ -1,0 +1,180 @@
+// src/peer_tool_policy.lume — /peer/invoke 的工具白名单(独立模块)
+//
+// 为什么单独成文件: 判定逻辑原先写在 peer_node.lume 里, 而那个文件带
+// `server{}` —— import 它就会尝试监听端口, 于是"想测白名单"变成"起一个服务"。
+// 策略是可单测的纯函数, 不该和进程启动绑在一起。
+//
+// ══════════════════════════════════════════════════════════════════
+// /peer/invoke 的工具白名单
+// ══════════════════════════════════════════════════════════════════
+//
+// 为什么 lan 特别需要: lan 背后是能调**任意 MCP 工具**的通用 agent。不设限
+// 的话, 持有共享凭据的对端可以调 fs__write_file / memory__delete_* ——
+// 等于把本机的写权限和记忆存储暴露给整个信任域。
+// crm/scanner 那种纯数据节点风险低(工具就几个), lan 是真正的写入口。
+//
+// ── 为什么分成两级 ──────────────────────────────────────────────────
+// 最初的做法是把所有危险动词平铺成一张表, 结果两头出错:
+//   * 漏判: memory__create_entities / memory__add_observations 是写操作,
+//     但 "create"/"add" 不在表里 —— 对端能往里塞记忆, 而且塞进去的东西
+//     会被后续推理当成事实。
+//   * 误伤: pptx__create / pptx__add_slide 是正常文档生成, 加了 create/add
+//     之后一起被拒, 把一个可用功能变成了不可用。
+// 两者的差别不在动词, 而在**改的是什么状态**:
+//   - 记忆 / git / 代码执行 → 跨调用、跨会话的状态, 改了会长期留存
+//   - 工作区内的文件生成   → 落在 MCP_FS_ROOT 沙箱里, 影响面有界
+// 所以: STRICT(跨边界状态) 禁所有变更动作; SCOPED(受限工作区) 只禁
+// 覆盖与删除 —— 创建/追加允许, 因为那正是这些工具存在的意义。
+//
+// ── 为什么是拒绝清单而不是穷举白名单 ────────────────────────────────
+// lan 的工具集合来自 agent-httpd 注册表, 随 MCP 配置增删(不是编译期常量)。
+// 穷举白名单会在新增工具时静默失效 —— 表现为"对端突然调不通", 然后有人
+// 为了修好把它整条删掉, 比不设更糟。拒绝清单是: 默认放行, 但明确危险的
+// 一律拒; 新增一个读工具自动可用。
+//
+// ⚠️ 边界: 本策略只管 `/peer/invoke`(对端**直接点名**调工具)。`/peer/ask`
+// 与 `/a2a` 走的是 agent 推理, agent 在推理过程中可能自己决定调用工具 ——
+// 那条路径不经过这里。要收紧到那条路径, 得在 agent-httpd 的工具注册表层面
+// 做(按调用来源区分权限), 那是另一个量级的改动, 不在本模块范围内。
+// 把这层想成"关上了最容易开的那扇门", 不是"封死了所有门"。
+
+// ── 第一级: 跨信任边界的命名空间, 禁一切变更动作 ────────────────────
+// 这些命名空间的状态会活过本次调用, 而且会被后续推理/自动化读到:
+//   memory__  跨会话的事实存储, 塞进去的假事实会影响之后的回答
+//   git__     仓库历史, push 会推到远端(影响别人)
+//   code__    等同执行任意代码
+//   exec/shell/sh  同上
+// 双下划线是 <server>__<tool> 的约定, 但 MCP 服务器也可能注册单下划线名
+// (如 shell_exec)。两种形态都要覆盖 —— 只按约定的形态写, 等于给非约定
+// 命名的工具开了后门。
+// fs__ 也归一级: 当前部署里 MCP_FS_ROOT 未设置、fs MCP 被跳过, 但那是
+// **环境事实, 不是策略**。换个部署把它指到工作区根(甚至是 $HOME)时,
+// 对端就能改本机的任意文件 —— 策略不能建立在"现在恰好没配"之上。
+let strict_prefixes = ["memory__", "git__", "code__", "exec__", "shell__",
+                       "sh__", "sudo__", "docker__", "fs__",
+                       "shell_", "exec_", "sudo_", "code_"];
+
+// 一级里允许的只读动作(其余一律拒)。用完整名而非动词, 便于逐个审。
+let strict_allow = ["memory__read_graph", "memory__search_nodes",
+                    "memory__open_nodes", "git__status", "git__log",
+                    "git__diff", "git__show", "docker__ps", "docker__logs",
+                    "fs__read_file", "fs__list_dir", "fs__search_files",
+                    "fs__read_text_file", "fs__list_directory", "fs__get_file_info"];
+
+// ── 第二级: 落在 MCP_FS_ROOT 沙箱内的文件动作 ────────────────────────
+// 只禁"覆盖/删除/移动"——这些会破坏已有产物或逃出预期目录。
+// create/add/append 允许: 那正是文档生成的正常工作方式。
+let scoped_prefixes = ["file__", "pptx__", "docx__", "xlsx__",
+                       "pdf__", "image__"];
+
+let destroy_verbs = ["write", "edit", "overwrite", "delete", "remove",
+                     "unlink", "rmdir", "move", "rename", "chmod", "chown",
+                     "truncate", "drop"];
+
+// 执行类动词。与 destroy_verbs 分开: destroy 指"删掉既有东西",
+// exec 指"执行任意代码/语句"—— 两者都禁止, 但拒绝理由要说清楚。
+let exec_verbs = ["exec", "execute", "eval", "run", "spawn", "shell",
+                  "system", "invoke"];
+
+// 一级里除白名单外, 命中这些动词即拒(变更类)。
+let mutate_verbs = ["write", "edit", "create", "add", "append", "insert",
+                    "delete", "remove", "update", "set", "put", "move",
+                    "rename", "commit", "push", "merge", "reset", "checkout",
+                    "stash", "exec", "run", "spawn", "shell", "eval", "apply",
+                    "install", "chmod", "chown", "truncate", "drop", "clear"];
+
+// 名字里是否含某个动词。
+// 用**词边界**匹配而不是裸子串: "reset" 不应命中 "preset", "add" 不应命中
+// "address"。分隔符是 _ - . 与串首尾。
+func has_any_word(name: string, words): string {
+  let n = lower(name);
+  let i = 0;
+  while (i < len(words)) {
+    let w = lower(str(get(words, i, "")));
+    if (len(w) > 0 and len(str_match("(^|[_\\.-])" + w + "($|[_\\.-])", n)) > 0) {
+      return w;
+    }
+    i = i + 1;
+  }
+  return "";
+}
+
+func starts_with_any(name: string, prefixes): string {
+  let n = lower(name);
+  let i = 0;
+  while (i < len(prefixes)) {
+    let p = lower(str(get(prefixes, i, "")));
+    if (len(p) > 0 and len(str_match("^" + p, n)) > 0) { return p; }
+    i = i + 1;
+  }
+  return "";
+}
+
+func in_list(name: string, items): bool {
+  let i = 0;
+  while (i < len(items)) {
+    if (name == str(get(items, i, ""))) { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+// 返回空串 = 允许; 非空 = 拒绝原因。
+export func deny_reason(tool_name: string): string {
+  if (len(tool_name) == 0) { return "empty tool name"; }
+
+  // 一级: 跨边界命名空间
+  let strict = starts_with_any(tool_name, strict_prefixes);
+  if (len(strict) > 0) {
+    if (in_list(tool_name, strict_allow)) { return ""; }
+    let v = has_any_word(tool_name, mutate_verbs);
+    if (len(v) > 0) {
+      return "tool '" + tool_name + "' under '" + strict +
+             "' may change persisted state (verb '" + v +
+             "') and is not on the read-only allowlist";
+    }
+    // 一级里没命中动词的, 也不放行 —— 未知名字在这个命名空间里默认拒,
+    // 因为这些工具一旦是写操作, 后果跨会话留存, 不给"猜错"的空间。
+    return "tool '" + tool_name + "' under '" + strict +
+           "' is not on the read-only allowlist";
+  }
+
+  // 二级: 沙箱内的文件动作, 只禁破坏性
+  let scoped = starts_with_any(tool_name, scoped_prefixes);
+  if (len(scoped) > 0) {
+    let d = has_any_word(tool_name, destroy_verbs);
+    if (len(d) > 0) {
+      return "tool '" + tool_name + "' under '" + scoped +
+             "' would overwrite or destroy existing artifacts (verb '" + d + "')";
+    }
+    return "";
+  }
+
+  // 其余命名空间(业务数据查询等): 拦破坏性 + 执行类动词。
+  // 执行类必须在这里也拦一道 —— sql__execute 既不在严格命名空间、动词又
+  // 不在 destroy 表里, 否则会被放行, 而它等同于任意 SQL。
+  let d2 = has_any_word(tool_name, destroy_verbs);
+  if (len(d2) > 0) {
+    return "tool '" + tool_name + "' contains destructive verb '" + d2 + "'";
+  }
+  let e2 = has_any_word(tool_name, exec_verbs);
+  if (len(e2) > 0) {
+    return "tool '" + tool_name + "' may execute arbitrary code (verb '" + e2 + "')";
+  }
+  return "";
+}
+
+// 便于审计/排障: 一次列出所有拒绝原因（空列表 = 全部放行）。
+export func explain(tool_names) {
+  let out = [];
+  let i = 0;
+  while (i < len(tool_names)) {
+    let t = str(get(tool_names, i, ""));
+    let r = deny_reason(t);
+    if (len(r) > 0) {
+      push(out, { "tool": t, reason: r });
+    }
+    i = i + 1;
+  }
+  return out;
+}

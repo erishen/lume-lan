@@ -1,0 +1,69 @@
+// approvals.lume — 待办任务的「可执行」写路径(看板 UI → 对端 /a2a)
+//
+// ── 为什么不是一个直接转发的代理 ──────────────────────────────────
+// A2A 的 message/send 本身就能续发: 对端收到带 taskId 的 message 会
+// append_message + input-required→submitted, 宿主 worker 再拾起推进。
+// 所以"审批"在协议层已经存在, 缺的只是 UI 到这条协议的路。
+//
+// 但**不能**让前端决定用什么角色批:
+// worker 的 parse_verdict 把纯 "yes" 视为"用当前待审角色批"。如果看板
+// 直接转发一句 "yes", 那这台看板就成了万能的批准器 —— 任何人都能顺着
+// 审批链一路批到终审, 职责分离(SoD)归零。审批链的意义就是"这一关必须
+// 由这个角色的节点过"。
+//
+// 所以本模块的规则:
+//   1. 角色由**服务端**从任务的 _chain/_approvals 自算(谁是下一关),
+//      前端只传 taskId + approve|reject, 传了 role 也不采信;
+//   2. 自算出的角色必须等于**本节点自己的名字** —— 即"这一关轮到我审,
+//      我作为自己批准"。看板批自己那一关(比如 network 域的 first 关是
+//      lan), 这就是本节点真实的角色, 不是冒充;
+//   3. 没轮到本节点的关一律拒绝, 提示"该由 X 审", 让流程继续走对端/工人。
+// 这样"能点按钮"和"谁有资格批"是同一件事, 而不是两套规则各说各话。
+
+// 本节点名。与 peer.lume / worker / peers_fetch 用同一个 PEER_NAME,
+// 保证"我是谁"在三处一致。
+export func self_name(): string {
+  let n = env("PEER_NAME");
+  if (n == null) { return ""; }
+  return n;
+}
+
+// 从审批链里找出下一关该由谁审(与 lume-core/lib/approval.lume 的 next_of
+// 语义一致: 按链顺序, 第一个还没有 approve 记录的角色)。
+// 刻意重新实现而**不是** import lume-core 的 approval.lume: 那边依赖
+// ROLE_ACTIONS 互斥表(=能不能做某动作), 这里只需要"链走到哪了", 且看板
+// 侧不该拿到能构造审批记录的能力。
+export func next_role(chain, approvals) {
+  let i = 0;
+  while (i < len(chain)) {
+    let c = get(chain, i, {});
+    let need = str(get(c, "role", ""));
+    if (len(need) == 0) { i = i + 1; }
+    else {
+      let got = false;
+      let j = 0;
+      while (j < len(approvals)) {
+        let a = get(approvals, j, {});
+        if (str(get(a, "role", "")) == need) {
+          if (str(get(a, "decision", "")) == "reject") {
+            return { done: true, role: "", rejected: true, node: "" };
+          }
+          if (str(get(a, "decision", "")) == "approve") { got = true; }
+        }
+        j = j + 1;
+      }
+      if (not got) {
+        return { done: false, role: need, rejected: false,
+                 node: str(get(c, "node", "")) };
+      }
+      i = i + 1;
+    }
+  }
+  return { done: true, role: "", rejected: false, node: "" };
+}
+
+// 是否已有人对当前关给出 reject(用于给前端"这单已被驳回"的准确说法)
+export func rejected(chain, approvals): bool {
+  let st = next_role(chain, approvals);
+  return st.rejected;
+}

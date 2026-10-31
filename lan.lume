@@ -24,6 +24,15 @@ server {
 // 领域层:读快照 + 组装响应(import 时不建库,纯无状态;快照文件由宿主 make scan 产出)
 import "src/devices.lume" as lantbl;
 
+// 审批写路径(看板唯一的写操作)。规则与边界见 src/approve_route.lume。
+// 与 /api/peers 的只读不同, 这条会签名后打执行方的 /a2a, 所以需要容器里有
+// PEER_NAME(我是谁) 与 PEER_ROOT / PEER_SHARED(怎么签)。缺任何一个都明确报错,
+// 不会静默降级成"匿名批准"。
+import "src/approvals.lume" as approvals;
+import "src/approve_route.lume" as approve_route;
+// 应用互访的「操作」入口: 调工具 / 问 agent(见 src/peer_actions.lume)。
+import "src/peer_actions.lume" as peer_actions;
+
 // 设备列表:读 .data/devices.json(缺失 → 空表 + 提示,不 500)。
 get "/api/devices", (req) => {
   return lantbl.devices_payload();

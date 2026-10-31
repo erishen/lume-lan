@@ -108,6 +108,12 @@ COPY lan.lume ./
 COPY src/ ./src/
 COPY scripts/ ./scripts/
 COPY www/ ./www/
+# lume-core/lib: peer / identity 等共享模块。lan.lume 与 peer_node.lume 都 import
+# "../lume-core/lib/peer.lume", 从 /app 看就是 /lume-core/lib/peer.lume —— 所以
+# 必须在镜像里放在**根目录**下, 且与宿主布局同名, 否则 import 解析失败。
+# (构建上下文里由 make docker-build 先把 ../lume-core/lib 同步到 .runtime/, 见
+#  下方 build 前的说明; 直接 COPY ../ 是不允许的。)
+COPY .runtime/lume-core/lib/ /lume-core/lib/
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

@@ -16,6 +16,7 @@ import "../lume-core/lib/peer.lume" as peer;
 import "src/peer/agent.lume" as agent;
 import "src/a2a.lume" as a2a;
 import "src/a2a_tasks.lume" as tasks;
+import "src/peer_tool_policy.lume" as policy;
 
 let bind_addr = env("PEER_BIND");
 if (bind_addr == null) { bind_addr = "127.0.0.1"; }
@@ -28,6 +29,18 @@ server {
   bind = bind_addr;
 };
 
+// 启动自检：把"实际生效的签名模式"打到日志。配了两套凭据时(历史遗留很常见)
+// 不主动看 health 就分不清用的是哪一套 —— 拿错算法签名会一路 401, 现象像密钥错。
+if (len(peer.config_warnings()) > 0) {
+  print("[peer] signature mode: " + peer.key_mode());
+  let wi = 0;
+  while (wi < len(peer.config_warnings())) {
+    print("[peer] WARN " + str(get(peer.config_warnings(), wi, "")));
+    wi = wi + 1;
+  }
+}
+
+
 get "/peer/health", (req) => {
   let v = peer.verify(req, "GET", "GET " + peer.path_only(req.path));
   if (!get(v, "ok", false)) {
@@ -38,6 +51,11 @@ get "/peer/health", (req) => {
     node: peer.node_info()["name"],
     peer: get(v, "node", ""),
     ts: int(now()),
+    // 实际生效的签名模式。配了两套凭据时(历史遗留很常见), 不看这个就分不清
+    // 到底是 ROOT 派生还是共享密钥在起作用 —— 拿错算法签名会一路 401。
+    mode: peer.key_mode(),
+    // 配置自检：空数组 = 没问题。非空说明有配置被静默忽略了。
+    warnings: peer.config_warnings(),
   };
 };
 
@@ -56,11 +74,26 @@ get "/peer/tools", (req) => {
   while (i < len(raw)) {
     let d = get(raw, i, {});
     let nm = str(get(d, "name", ""));
+    // 标注 peer 面的可用性。**不隐藏**被拒的工具:
+    //   - 隐藏会让"为什么调不通"变成谜(对端压根不知道有这个工具);
+    //   - 标注则让调用方在编排阶段就能排除, 不必靠失败重试去发现。
+    // 拒绝理由复用同一份 policy, 保证清单与执行不会各说各话。
+    let why = policy.deny_reason(nm);
+    let hint = when_hint(nm);
+    // 被策略拒绝的工具, 提示语要**说清楚它调不通**, 而不是让"慎用"这种措辞
+    // 把人引向"能用但要小心"。agent 读的是 when_to_use, 措辞会直接改变它的
+    // 决策: 写"慎用"它仍会尝试, 写"不可调用"它才会避开。
+    if (len(why) > 0) {
+      hint = "peer 面不可调用（" + why + "）。本机 agent 内部仍可用。";
+    }
     push(out, {
       name: nm,
       "server": str(get(d, "server", "")),
       desc: str(get(d, "desc", "")),
-      "when_to_use": when_hint(nm),
+      "when_to_use": hint,
+      // true = 可经 /peer/invoke 调用; false = 本机可用但对端不可调
+      "peer_callable": len(why) == 0,
+      "peer_blocked_reason": why,
     });
     i = i + 1;
   }
@@ -120,6 +153,13 @@ post "/peer/invoke", (req) => {
   let tool_name = str(get(parsed.ok, "tool", ""));
   if (len(tool_name) == 0) {
     return { ok: false, error: "缺少 tool 字段" };
+  }
+  // 白名单: 写/执行类动作不在 peer 面开放(见文件上方说明)。拒绝信息明说
+  // 原因, 否则对端只看到"调用失败", 不知道是策略拦的还是工具不存在。
+  let why = policy.deny_reason(tool_name);
+  if (len(why) > 0) {
+    return { ok: false, denied: true, node: peer.node_info()["name"],
+             from: get(v, "node", ""), "tool": tool_name, error: why };
   }
   // arguments 原样透传(已是 JSON 对象时 stringify 回去, 保证是合法 JSON 文本)
   let args_val = get(parsed.ok, "arguments", null);
@@ -224,6 +264,51 @@ post "/a2a", (req) => {
   let mid = get(rpc, "id", null);
   let method = str(get(rpc, "method", ""));
 
+  // ---- message/stream: SSE 事件流 ----
+  //
+  // Card 里声明了 streaming:true, **必须真的实现** —— 谎报会让客户端
+  // 等一条永远不来的流(探针报 "未启用流式, 建议 card 里 streaming=false")。
+  //
+  // 与 crm/scanner 同一套: 同步执行 + 一次性回放事件。lan 背后是 agent,
+  // 所以事件在 agent 答完后一次性生成; 语义正确(同样的序列), 但没有
+  // "边跑边看" —— lume 没有异步原语, 这是已知限制。
+  if (method == "message/stream" or method == "message/streaming") {
+    let params = get(rpc, "params", {});
+    let q = a2a.message_text(params);
+    if (len(q) == 0) {
+      return { jsonrpc: "2.0", id: mid,
+               error: { code: -32602, message: "params.message.parts 里没有 text" } };
+    }
+    let ctx = str(get(params, "contextId", ""));
+    if (len(ctx) == 0) { ctx = peer.new_message_id(); }
+    let tid = peer.new_task_id();
+
+    let events = [];
+    push(events, stringify({ jsonrpc: "2.0", id: mid,
+      result: { taskId: tid, contextId: ctx, kind: "status-update",
+                status: { state: "working", timestamp: str(now()) }, "final": false } }));
+
+    let r0 = agent.ask(q, ctx);
+    if (!get(r0, "ok", false)) {
+      push(events, stringify({ jsonrpc: "2.0", id: mid,
+        result: { taskId: tid, contextId: ctx, kind: "status-update",
+                  status: { state: "failed", timestamp: str(now()),
+                            message: { role: "agent", parts: [{ kind: "text",
+                              text: "agent 不可达: " + str(get(r0, "error", "")) }] } },
+                  "final": true } }));
+      return { sse: events };
+    }
+    push(events, stringify({ jsonrpc: "2.0", id: mid,
+      result: { taskId: tid, contextId: ctx, kind: "artifact-update",
+                artifact: { artifactId: peer.new_message_id(),
+                            parts: [{ kind: "text", text: str(get(r0, "answer", "")) }] },
+                append: false, lastChunk: true } }));
+    push(events, stringify({ jsonrpc: "2.0", id: mid,
+      result: { taskId: tid, contextId: ctx, kind: "status-update",
+                status: { state: "completed", timestamp: str(now()) }, "final": true } }));
+    return { sse: events };
+  }
+
   if (method == "message/send" or method == "tasks/send") {
     let params = get(rpc, "params", {});
     let q = a2a.message_text(params);
@@ -258,6 +343,25 @@ post "/a2a", (req) => {
     }
 
     let tid = peer.new_task_id();
+
+    // ---- 异步模式: 只落 submitted, 由宿主 worker 推进 ----
+    //
+    // 与 crm/scanner 同一套语义: `configuration.async=true` 表示"已受理,
+    // 稍后取结果"。不能在这里同步算完再标 completed —— 那样调用方的轮询
+    // 永远看不到 working, tasks/cancel 也永远返回 -32002。
+    //
+    // lan 的 worker 由 lume-lan 的 a2a_worker.py 承担(与 blog 共用一个);
+    // payload 按 worker 认识的约定落盘。
+    let cfg = get(params, "configuration", {});
+    let want_async = get(cfg, "async", false) == true;
+    if (want_async) {
+      let pl = get(params, "payload", null);
+      if (pl == null) {
+        pl = { kind: "dispatch", target: str(get(cfg, "target", "")), question: q };
+      }
+      let created = tasks.create(tid, ctx, pl);
+      return { jsonrpc: "2.0", id: mid, result: created };
+    }
 
     // 本节点的特殊之处: 背后是 agent, 直接转发(会真的推理与调工具)
     let r = agent.ask(q, ctx);

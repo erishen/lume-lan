@@ -140,6 +140,11 @@ dns-fetch:
 peers-fetch:
 	@$(PY) scripts/peers_fetch.py
 
+# peer 快照常驻采集: 每 PEER_REFRESH_SECS(默认 60) 秒一轮, 且看板审批后
+# (.data/.peers-refresh 标记)立刻重采 —— 让「批准/驳回」点完就能看到结果。
+peers-watch:
+	@PEER_REFRESH_SECS=$(REFRESH_SECS) $(PY) scripts/peers_fetch.py --loop
+
 # ---- A2A 长任务 worker ----
 # lume 没有 spawn/exec, http_* 也是同步阻塞 —— 「提交后立刻返回、后台慢慢跑」
 # 这件事在纯 lume 里做不到, 必须由这个宿主进程把任务从 submitted 推到完成。
@@ -185,21 +190,193 @@ test:
 
 # 隐私检查(仓库公开): 已跟踪文件里不得出现真实局域网标识。
 # 硬规则扫私有网段/公网 IP/MAC(示例值白名单放行); 加 LOCAL=1 再比对本机 .data/ 实况。
+# 默认扫「已跟踪 + 未跟踪(未被 .gitignore 忽略)」——未跟踪那部分很关键:
+# 新写的文件最容易带进真实网段, 而旧实现只查 git ls-files, 等于提交前
+# 完全看不见它们。加 TRACKED=1 可退回只查已跟踪的旧行为。
 privacy:
-	@$(PY) scripts/check_privacy.py $(if $(LOCAL),--local,)
+	@$(PY) scripts/check_privacy.py $(if $(LOCAL),--local,) $(if $(TRACKED),--tracked,)
 
 # ---- 跨机 peer 通讯(见 docs/peer.md) ----
 # 起本节点: make peer-serve(读 .env 的 PEER_SHARED/PEER_NAME/PEER_BIND/PEER_PORT)
 peer-serve: check-peer
 	@$(LUME) peer_node.lume
 
+# 本节点的「带 agent」形态: agent-httpd(被 /peer/ask 调用) + peer_node(对外端点)。
+#
+# 为什么需要单独一个目标: 只有 peer_node 时 /peer/ask 会回 404 —— 它背后
+# 没有 agent 进程。看板那边于是探测到 agent=false, 不显示提问框, 看起来像
+# "这个功能没做"。两个进程必须一起起。
+#
+# 用的是**仓库里的 lume**(../lume/bin/lume), 不是 ~/.local/bin/lume:
+# 后者是 10 月 23 日的旧版本, 与工作区源码不一致。之前踩过 —— 旧版常驻着,
+# 新版起来后两个实例争同一个端口和同一个 db 文件, 数据时而正常时而全 0。
+LUME_REPO_BIN ?= ../lume/bin/lume
+AGENT_HTTPD   ?= ../lume/agent-httpd/bin/agent-httpd
+AGENT_PORT    ?= 18099
+PEER_PORT_RUN ?= 18092
+# 绑定地址。默认 127.0.0.1(单机安全基线: 只有本机能连)。
+#
+# 跨机时必须设 0.0.0.0 —— 但那个决定不该藏在 Makefile 里: 之前这里是硬编码
+# 127.0.0.1, 于是 .env 里写 PEER_BIND=0.0.0.0 完全不生效, 而文档却说"配
+# PEER_BIND 即可"。这种"配了不生效"比"不支持"更难排查(实测另一台机器
+# 连过来只得到连接被拒, 看起来像网络问题)。
+#
+# 现在: .env 的 PEER_BIND 优先, 没写才用 127.0.0.1。
+PEER_BIND_RUN ?= $(shell grep -E '^PEER_BIND=' .env 2>/dev/null | cut -d= -f2- | sed 's/^$$/127.0.0.1/')
+PEER_BIND_RUN := $(if $(PEER_BIND_RUN),$(PEER_BIND_RUN),127.0.0.1)
+# /a2a 与 /peer/ask 里等 agent 答完的上限。
+#
+# 默认 90s 不够: lan 的 agent 挂了 peers MCP(18 个跨节点工具), 模型要在里面
+# 挑一个再综合, 实测单次 90s 打满仍失败。数据节点(crm/scanner)没这个问题,
+# 因为它们先走关键词匹配, 认不出才委派 —— 而 lan 每句都问 agent。
+PEER_AGENT_TIMEOUT ?= 240
+
+peer-serve-agent: check-peer
+	@if [ ! -x "$(LUME_REPO_BIN)" ]; then \
+	  echo "✗ 找不到 $(LUME_REPO_BIN) —— 先 cd ../lume && make" >&2; exit 1; fi
+	@if [ ! -x "$(AGENT_HTTPD)" ]; then \
+	  echo "✗ 找不到 $(AGENT_HTTPD) —— 先 cd ../lume/agent-httpd && make" >&2; exit 1; fi
+	@# agent 只绑 loopback: 它没有自带的鉴权, 暴露到网卡上是事故。
+	@# peer_node 才是对外端点(有签名校验)。
+	@echo "▶ agent-httpd :$(AGENT_PORT) (loopback)"
+	@AGENT_URL=http://127.0.0.1:$(AGENT_PORT) \
+	  $(AGENT_HTTPD) -p $(AGENT_PORT) -w 2 & \
+	 sleep 1; \
+	 echo "▶ peer_node :$(PEER_PORT_RUN)"; \
+	 AGENT_URL=http://127.0.0.1:$(AGENT_PORT) \
+	   $(LUME_REPO_BIN) peer_node.lume; \
+	 kill %1 2>/dev/null || true
+
 # 探测对端: make peer-probe PEER_HOST=192.168.1.20:18092
 peer-probe: check-peer
 	@$(LUME) peer_probe.lume
 
+# 语法检查用**仓库里的** lume: 旧版 ~/.local/bin/lume(10-23)不认识新的
+# 语法/类型规则, 用它检查会漏报或误报, 让 --check 失去意义。
 check-peer:
-	@$(LUME) --check peer_node.lume
-	@$(LUME) --check peer_probe.lume
+	@if [ -x "$(LUME_REPO_BIN)" ]; then $(LUME_REPO_BIN) --check peer_node.lume; \
+	 else $(LUME) --check peer_node.lume; fi
+	@if [ -x "$(LUME_REPO_BIN)" ]; then $(LUME_REPO_BIN) --check peer_probe.lume; \
+	 else $(LUME) --check peer_probe.lume; fi
+
+# 后台常驻本节点的 peer 端点 + agent(供看板「应用互访」的提问框使用)。
+#
+# 与 peer-serve-agent 的区别: 那个是前台(调试时看得见日志); 这个是后台,
+# 日志落 .runtime/, 适合长期挂着让看板随时能问。
+#
+# 注意它**不会**自动改 PEER_TARGETS: 探测列表在 .env 里, 由人决定要探谁。
+# 起完之后需要在 .env 的 PEER_TARGETS 里加上 127.0.0.1:$(PEER_PORT_RUN)。
+# 起本节点(agent-httpd + peer_node)。
+#
+# agent-httpd 必须继承 PEER_* : 它拉起的 peer_bridge.py(MCP) 靠这些变量去
+# 探测各节点。不传的话 bridge 探测到 0 个节点, agent 只拿到 _peers__discover
+# 一个空壳工具 —— 表面"接上了", 实际什么也调不了。
+# 起本节点(agent-httpd + peer_node)。
+# 顺带把自己的名字写进共享自注册目录 —— 见 scripts/peer_registry.py。
+# 这样别的节点不需要为"多了一个应用"改它们自己的白名单。
+peer-up: peer-register
+	@mkdir -p .runtime
+	@if pgrep -f "agent-httpd -p $(AGENT_PORT)" >/dev/null 2>&1; then \
+	  echo "  agent-httpd :$(AGENT_PORT) 已在运行"; \
+	 else \
+	  AGENT_URL=http://127.0.0.1:$(AGENT_PORT) \
+	  PEER_NAME=$$(grep -E '^PEER_NAME=' .env | cut -d= -f2) \
+	  PEER_SHARED=$$(grep -E '^PEER_SHARED=' .env | cut -d= -f2) \
+	  PEER_ROOT=$$(grep -E '^PEER_ROOT=' .env | cut -d= -f2) \
+	  PEER_TARGETS=$$(grep -E '^PEER_TARGETS=' .env | cut -d= -f2) \
+	  AGENT_TIMEOUT=$(PEER_AGENT_TIMEOUT) \
+	  LLM_API_URL=$$(grep -E '^LLM_API_URL=' .env | cut -d= -f2-) \
+	  LLM_MODEL=$$(grep -E '^LLM_MODEL=' .env | cut -d= -f2-) \
+	  LLM_API_KEY=$$(grep -E '^LLM_API_KEY=' .env | cut -d= -f2-) \
+	    nohup $(AGENT_HTTPD) -p $(AGENT_PORT) -w 2 > .runtime/agent-httpd.log 2>&1 & \
+	  echo "  已启动 agent-httpd :$(AGENT_PORT) → .runtime/agent-httpd.log"; fi
+	@sleep 1
+	@# 按**端口**判断, 不是按进程名: "peer_node.lume" 这个模式会同时匹配到
+	@# blog/crm/scanner 的进程, 于是这里误判"已在运行"而跳过启动, 18092 一直
+	@# 空着 —— 表现为看板的提问框不见了, 却查不出谁没起。
+	@if lsof -nP -iTCP:$(PEER_PORT_RUN) -sTCP:LISTEN >/dev/null 2>&1; then \
+	  echo "  peer_node :$(PEER_PORT_RUN) 已在监听"; \
+	 else \
+	  AGENT_URL=http://127.0.0.1:$(AGENT_PORT) \
+	  PEER_NAME=$$(grep -E '^PEER_NAME=' .env | cut -d= -f2) \
+	  PEER_SHARED=$$(grep -E '^PEER_SHARED=' .env | cut -d= -f2) \
+	  PEER_ROOT=$$(grep -E '^PEER_ROOT=' .env | cut -d= -f2) \
+	  PEER_PORT=$(PEER_PORT_RUN) PEER_BIND=$(PEER_BIND_RUN) \
+	    nohup $(LUME_REPO_BIN) peer_node.lume > .runtime/peer_node.log 2>&1 & \
+	  echo "  已启动 peer_node :$(PEER_PORT_RUN) → .runtime/peer_node.log"; fi
+	@sleep 2
+	@echo "▶ 验证: python3 scripts/peers_fetch.py 后看 .data/peers.json 的 agent 字段"
+
+# 只停**本节点**, 不碰别的应用。
+#
+# 踩过的坑: 原来这里写 `pkill -f "peer_node.lume"`, 它按进程名匹配 ——
+# blog/crm/scanner 的节点进程名长得一模一样, 于是一起被杀。表现是
+# "make peer-down 之后看板里的对端全变不可达", 而日志里只有一句
+# 已停止, 完全看不出波及了别人。
+#
+# 现在按**端口**定位本节点(18092), 用 lsof 取出 pid 再杀。
+peer-down:
+	@if lsof -nP -iTCP:$(PEER_PORT_RUN) -sTCP:LISTEN >/dev/null 2>&1; then \
+	  lsof -nP -tiTCP:$(PEER_PORT_RUN) -sTCP:LISTEN | xargs kill 2>/dev/null || true; \
+	  echo "  已停 peer_node :$(PEER_PORT_RUN)"; \
+	 else echo "  peer_node :$(PEER_PORT_RUN) 未在运行"; fi
+	@if lsof -nP -iTCP:$(AGENT_PORT) -sTCP:LISTEN >/dev/null 2>&1; then \
+	  lsof -nP -tiTCP:$(AGENT_PORT) -sTCP:LISTEN | xargs kill 2>/dev/null || true; \
+	  echo "  已停 agent-httpd :$(AGENT_PORT)"; \
+	 else echo "  agent-httpd :$(AGENT_PORT) 未在运行"; fi
+
+# 本节点(带 agent)的启停用 peer-up / peer-down。**别的应用不在这里起** ——
+# 每个应用自己管自己的 peer_node.lume(各自仓库有 make peer-up)。
+#
+# 早期这里有个 peer-up-apps 会去拉起 blog/crm/scanner 的进程, 那是错的:
+#   * 版本漂移 —— 对端改了 peer_node.lume, 看板不知道, 也不会重启它;
+#   * 配置漂移 —— 端口/数据路径变了, 看板里硬编码的那份信息就过时了;
+#   * 权限错位 —— 一个应用凭什么能起另一个应用的进程?
+# 看板的职责只是**探**和**展示**。
+#
+# 探不到节点时, 提示去哪起, 而不是替它起。
+# 常驻采集: 每 REFRESH_SECS 秒重采一次快照, 有刷新标记(审批后写的)立刻采。
+#
+# 为什么需要它: 没有常驻采集时快照只在手动 make peers-fetch 时更新, 页面
+# 会一直显示几小时前的数据 —— 节点掉线也看不出来, 而这种"数据是旧的"
+# 从界面上完全看不出来(除非去看 age_secs)。
+peer-watch:
+	@mkdir -p .runtime
+	@if pgrep -f "peers_fetch.py --loop" >/dev/null 2>&1; then \
+	  echo "  peer 采集已在运行"; \
+	 else \
+	  nohup sh -c 'PEER_REFRESH_SECS=$(REFRESH_SECS) $(PY) scripts/peers_fetch.py --loop' \
+	    > .runtime/peers-watch.log 2>&1 & \
+	  echo $$! > .runtime/peers-watch.pid; \
+	  echo "  已启动 peer 采集(每 $(REFRESH_SECS)s) → .runtime/peers-watch.log"; fi
+
+peer-watch-stop:
+	@pkill -f "peers_fetch.py --loop" 2>/dev/null && echo "  已停止 peer 采集" \
+	  || echo "  peer 采集未在运行"
+
+# 自注册: 把本节点写进 .data/peers.d/<name>.json。
+# 别的节点靠扫这个目录认人(identity.lume 的 known 会先查目录)。
+peer-register:
+	@$(PY) scripts/peer_registry.py register \
+	  --name "$$(grep -E '^PEER_NAME=' .env | cut -d= -f2-)" \
+	  --port $(PEER_PORT_RUN) 2>/dev/null || \
+	  echo "  (自注册跳过: 无法确定 PEER_NAME)"
+
+peer-registry:
+	@$(PY) scripts/peer_registry.py list
+
+peer-hint:
+	@echo "▶ 各应用的 peer 节点由它自己启动:"
+	@echo "    cd ../lume-blog    && make peer-up   # :18321"
+	@echo "    cd ../lume-crm     && make peer-up   # :18102 (或 make docker-peer-up 用容器)"
+	@echo "    cd ../lume-scanner && make peer-up   # :18103 (或 make docker-peer-up 用容器)"
+	@echo "  然后: make peers-fetch"
+
+peer-status:
+	@a=$$(pgrep -f 'agent-httpd -p $(AGENT_PORT)' | head -1); \
+	 echo "agent-httpd :$(AGENT_PORT)  $${a:-未运行}"; \
+	 p=$$(pgrep -f 'peer_node.lume' | head -1); \
+	 echo "peer_node   :$(PEER_PORT_RUN) $${p:-未运行}"
 
 # 安装 git 钩子: 提交前自动跑 privacy --staged(只查本次暂存的改动)。
 hooks:
@@ -250,9 +427,42 @@ lan-dev: dev
 docker-fetch:
 	@sh scripts/fetch_lume_vendor.sh "$(LUME_VERSION)" "$(LUME_REPO)"
 
+# 用**工作区源码**重编静态 Linux lume 打进 vendor/(不经 GitHub release)。
+#
+# 什么时候用: 上游 release 落后于本地修复时。踩过的实例 —— fork 前 TLS 预热
+# (lume_http_warmup)是本地新增的, 上游 v0.11.0 里没有; 用 release 二进制打镜像,
+# 容器里所有 A2A 出站首次 HTTPS 都会失败, 而源码怎么看都是对的。
+#
+# 产物额外写 vendor/.lume-build 记录来源/commit/未提交改动数 —— 本地构建无法用
+# 上游 digest 校验, 只能靠这份元数据追溯。.lume-version 仍是 v0.11.0(否则被下面的
+# docker-build 版本闸门拒掉)。
+#
+# 注意: 一旦跑过 vendor-src, docker-build 就**不能**再依赖 docker-fetch,
+# 否则会被上游包覆盖回去(见下面 docker-build 的 guard)。
+vendor-src:
+	@sh scripts/build_vendor_from_source.sh
+
 # 打镜像(先宿主预下载 Lume 二进制, 再 build; build 时 COPY vendor/ 离线安装)。
 # 多架构: 见下方 docker-build-multiarch(它需 vendor/ 同时含两种 arch, 可用 LUME_VERSION 指定)。
-docker-build: docker-fetch
+#
+# 若 vendor/.lume-build 存在(说明用的是本地源码构建), 跳过 docker-fetch ——
+# 否则会把本地编译的带修复二进制换成上游 release 的, 静默退回旧行为。
+docker-build:
+	@if [ -f vendor/.lume-build ]; then \
+	  echo "▶ vendor/ 来自本地源码构建(见 vendor/.lume-build), 跳过 docker-fetch"; \
+	else \
+	  $(MAKE) --no-print-directory docker-fetch; \
+	fi
+	@# lume-core/lib 在构建上下文之外(Docker 不允许 COPY ../), 先同步到 .runtime/
+	@# 再由 Dockerfile COPY 进镜像根 /lume-core/lib —— 那是 lan.lume 里
+	@# "../lume-core/lib/peer.lume" 从 /app 解析出来的位置。
+	@if [ -d ../lume-core/lib ]; then \
+	  rm -rf .runtime/lume-core && mkdir -p .runtime/lume-core && \
+	  cp -R ../lume-core/lib .runtime/lume-core/ && \
+	  echo "▶ 同步 lume-core/lib → .runtime/lume-core/lib"; \
+	else \
+	  echo "✗ 找不到 ../lume-core/lib (lume-core 仓库应与 lume-lan 同级)" >&2; exit 1; \
+	fi
 	@echo "▶ 打镜像 $(DOCKER_IMAGE)(LUME_VERSION=$(LUME_VERSION), 离线用 vendor/)…"
 	@docker build --build-arg LUME_VERSION=$(LUME_VERSION) -t $(DOCKER_IMAGE) .
 
@@ -275,11 +485,38 @@ docker-run: scan router-fetch
 
 # 后台起 / 停。主 docker-compose.yml 只含 lume-lan 看板(AdGuard 已迁宿主 launchd)。
 # 宿主 web 端口: 看板 DOCKER_PORT(10091); AdGuard 控制台 ADGUARD_PORT(10095), 由宿主服务提供。
-docker-up:
-	@[ -f .runtime/htpasswd ] || { echo "✗ .runtime/htpasswd 不存在——先 make auth-pass 生成看板凭据(compose 挂载它做 Basic Auth, 缺失会挂空目录)"; exit 1; }
+docker-up: check-peer-net
+	@# 只有显式开了认证(KANBAN_AUTH 非空)才检查凭据文件。
+	@# 默认关: 容器只绑 127.0.0.1, 认证的边际防护小, 而 Basic 的凭据缓存
+	@# 不可靠 —— 表现为"每次刷新都要重新登录"。
+	@if [ -n "$(KANBAN_AUTH)" ] && [ ! -f .runtime/htpasswd ]; then \
+	  echo "✗ 开了 KANBAN_AUTH 但没有 .runtime/htpasswd —— 先 make auth-pass" >&2; \
+	  exit 1; fi
 	@echo "▶ 起看板容器 → http://127.0.0.1:$(DOCKER_PORT)/  (AdGuard 是宿主服务: make adguard-up)"
-	@DOCKER_PORT=$(DOCKER_PORT) docker compose up -d
+	@DOCKER_PORT=$(DOCKER_PORT) KANBAN_AUTH="$(KANBAN_AUTH)" docker compose up -d
 	@echo "  (设备 DNS 首选指 <本机IP>:53 才有域名记录; 没配 AdGuard 也不影响看板)"
+
+# ---- 跨应用共享网络(lume-peer-net) ----
+#
+# 各应用的 peer 节点**不发布宿主端口**(compose 里是 expose), 靠这张网按
+# 别名互访: 看板 → crm-peer:18102 / scanner-peer:18103。
+#
+# 为什么用 external 而不是让某个 compose 定义: 三个应用各自独立部署,
+# 谁先起都不该决定这张网的生命周期。代价是它可能不存在 —— 所以每个
+# docker 相关目标都先过一遍这个检查, 而不是让人在报错里才第一次见到它。
+#
+# 幂等: 已存在就什么都不做(不 recreate, 免得把正在用的容器踢出网络)。
+PEER_NET ?= lume-peer-net
+
+check-peer-net:
+	@if docker network inspect $(PEER_NET) >/dev/null 2>&1; then :; \
+	 else \
+	  echo "▶ 创建共享网络 $(PEER_NET)(各应用 peer 节点靠它按别名互访)"; \
+	  docker network create $(PEER_NET) >/dev/null; \
+	 fi
+
+peer-net-rm:
+	@docker network rm $(PEER_NET) 2>/dev/null && echo "  已删除 $(PEER_NET)" || echo "  $(PEER_NET) 不存在或仍被容器占用"
 
 docker-down:
 	@docker compose down
@@ -301,8 +538,9 @@ docker-compose:
 docker-compose-down:
 	@docker compose down
 
-.PHONY: default dev lan lan-dev stop scan scan-sweep check test privacy hooks peer-serve peer-probe check-peer ui watch router-fetch notify-test daily-digest \
-         adguard-up adguard-down adguard-log dns-fetch dns-watch peers-fetch \
+.PHONY: default dev lan lan-dev stop scan scan-sweep check test privacy hooks peer-serve peer-serve-agent peer-probe check-peer \
+         peer-up peer-down peer-status peer-hint peer-register peer-registry peer-watch peer-watch-stop ui watch router-fetch notify-test daily-digest \
+         adguard-up adguard-down adguard-log dns-fetch dns-watch peers-fetch peers-watch \
          a2a-worker a2a-worker-once \
          block block-list unblock \
-         docker-fetch docker-build docker-build-multiarch docker-run docker-up docker-down docker-redeploy docker-compose docker-compose-down
+         docker-fetch vendor-src docker-build docker-build-multiarch docker-run docker-up docker-down check-peer-net peer-net-rm docker-redeploy docker-compose docker-compose-down

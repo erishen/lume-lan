@@ -1,0 +1,8 @@
+source=local-source-build
+base_version=v0.11.0
+built_at=2026-10-29T11:49:14Z
+platform=linux/arm64
+git_lume=392855e
+git_agenthttpd=a90ae5c
+uncommitted=3
+note=含 fork 前 TLS 预热修复 (lume_http_warmup), 非上游 release 产物

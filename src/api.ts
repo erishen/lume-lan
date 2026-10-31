@@ -178,6 +178,11 @@ export interface PeerNode {
   /** 对端 PEER_SITE_NAME(博客这类应用会给) */
   site: string;
   tools: PeerTool[];
+  /**
+   * 是否有可问答的 agent(探测 /peer/agent 得出)。
+   * 纯数据节点(博客)没有这条路由 —— 界面据此决定是否给提问框。
+   */
+  agent?: boolean;
   /** /peer/info 的只读概要(可选端点, 只有声明了它的节点才有) */
   info?: Record<string, unknown>;
   error?: string;
@@ -203,18 +208,49 @@ export interface PendingTask {
   waiting_for: string;    // 当前该谁审(执行方给的人话)
   since: number;
   source: string;
+  /** 这一关是否轮到本节点 —— 服务端算好下发, 前端只读(别在这儿重算规则) */
+  can_act?: boolean;
+  /** 下一关该由哪个节点审(空串 = 人工终审) */
+  next_node?: string;
+  /** can_act 为 false 的原因, 直接显示给人的话 */
+  blocked_reason?: string;
 }
 
 /** 一条审计记录(a2a-audit.jsonl 尾部) */
 export interface AuditRow {
   at: number;
-  event: string;          // approval_required | approval_denied | approval_step | ...
+  /**
+   * 事件名。分两类, 回答不同问题:
+   *   approval_required / approval_step / approval_denied / approval_granted
+   *       → 谁批准了什么(决策链, 合规追溯用)
+   *   a2a_call / task_finished
+   *       → 发起了什么、对端怎么答、多快(链路健康, 排障与 SLA 用)
+   */
+  event: string;
   task_id: string;
   role: string;
   required_role: string;
   claimed_role: string;
+  /** a2a_call 专用: 目标节点 / 协议方法 / 结果分类 / HTTP 状态 / 耗时 */
+  target?: string;
+  method?: string;
+  outcome?: string;         // ok | denied | unreachable | bad_response
+  status?: number;
+  elapsed_ms?: number;
+  detail?: string;
+  /** 审批入口: lan-ui(看板点) | cli(脚本发) | unknown */
+  origin?: string;
+  actor?: string;
+  tool?: string;
   decision: string;
   reason: string;
+  /**
+   * 这条记录来自哪一侧 —— 合并了两份审计, 这个字段是区分依据:
+   *   "lan-ui"        → 看板自己发出的那一跳(可能没到对端)
+   *   "<执行方名>"     → 执行方收到并处理的调用(如 "lume-blog")
+   * 同一次调用在两边都有时会出现两条: 这正说明"发出去了, 对方也处理了"。
+   * 只有一侧有, 则能直接判断失败发生在哪一段。
+   */
   source: string;
 }
 
@@ -304,8 +340,126 @@ export function apiDns(): Promise<DnsPayload> {
   return apiGet<DnsPayload>("/api/dns");
 }
 
+/** 调对端工具的结果。ok=false 时 error 是给人看的一句话。 */
+export interface PeerInvokeResult {
+  ok: boolean;
+  tool?: string;
+  target?: string;
+  elapsed_ms?: number;
+  result?: unknown;
+  error?: string;
+  agent_status?: number;
+}
+
+/**
+ * 在看板上直接调用对端的一个工具。
+ *
+ * `peer` 传 target 或节点名都行(服务端两种都认); 工具名会被服务端的
+ * **能力清单**校验 —— 不在对端声明里的名字会被拒, 这里不做前端预判,
+ * 免得两边规则漂移。
+ */
+export async function apiPeerInvoke(
+  peer: string, tool: string, args: Record<string, unknown> = {},
+): Promise<PeerInvokeResult> {
+  const r = await window.fetch("/api/peer/invoke", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ peer, tool, arguments: args }),
+  });
+  if (!r.ok) return { ok: false, error: "/api/peer/invoke -> HTTP " + r.status };
+  return (await r.json()) as PeerInvokeResult;
+}
+
+export interface PeerAskResult {
+  ok: boolean;
+  target?: string;
+  elapsed_ms?: number;
+  answer?: string;
+  notes?: string[];
+  error?: string;
+}
+
+/** 向对端 agent 提一个问题(同步等回答, 不是 A2A 的异步任务)。 */
+export async function apiPeerAsk(peer: string, question: string): Promise<PeerAskResult> {
+  const r = await window.fetch("/api/peer/ask", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ peer, question }),
+  });
+  if (!r.ok) return { ok: false, error: "/api/peer/ask -> HTTP " + r.status };
+  return (await r.json()) as PeerAskResult;
+}
+
+/** 与 agent 对话的结果。*/
+export interface ChatResult {
+  ok: boolean;
+  answer?: string;
+  /** agent 每轮调用工具的痕迹, 如 "peers__crm__crm.stats" —— 让用户知道数据哪来的 */
+  notes?: string[];
+  elapsed_ms?: number;
+  complete?: boolean;
+  error?: string;
+}
+
+/**
+ * 和本机 agent 说一句话。
+ *
+ * 同步等答完(不是流式): 后端 lume 的 http_post 收完整响应才返回, 没法边收边转发。
+ * 所以前端要显示"等待中", 并用返回的 notes 展示它查了哪些节点。
+ */
+export async function apiChat(message: string, sessionId?: string): Promise<ChatResult> {
+  const r = await window.fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, sessionId: sessionId || "" }),
+  });
+  if (!r.ok) return { ok: false, error: "/api/chat -> HTTP " + r.status };
+  return (await r.json()) as ChatResult;
+}
+
 export function apiPeers(): Promise<PeersPayload> {
   return apiGet<PeersPayload>("/api/peers");
+}
+
+/** 审批结果。ok=false 时 error 是给人看的完整句子(服务端已含"该由谁审")。 */
+export interface ApproveResult {
+  ok: boolean;
+  error?: string;
+  id?: string;
+  role?: string;
+  decision?: string;
+  state?: string;
+  required_role?: string;
+  required_node?: string;
+}
+
+/**
+ * 批准/驳回一条待办。
+ *
+ * 只传 id 与 decision: **角色由服务端自己算**(它知道这一关轮到谁), 前端传了
+ * 也不采信。这样"看板能不能批"和"谁有资格批"是同一个判定, 不会因为前端逻辑
+ * 放松而变成任意人可代批。
+ */
+export async function apiApprove(id: string, decision: "approve" | "reject",
+                                 note?: string): Promise<ApproveResult> {
+  const r = await window.fetch("/api/approve", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, decision, note: note || "" }),
+  });
+  // 服务端对"不该你批"返回 200 + ok:false(业务拒绝, 不是协议错误),
+  // 所以这里不能只看 HTTP 状态码。
+  if (!r.ok) {
+    let msg = "/api/approve -> HTTP " + r.status;
+    try {
+      const j = (await r.json()) as ApproveResult;
+      if (j && j.error) msg = j.error;
+    } catch {
+      /* 非 JSON 错误页, 保留状态码文案 */
+    }
+    return { ok: false, error: msg };
+  }
+  return (await r.json()) as ApproveResult;
 }
 
 export function fmtBytes(n?: number): string {

@@ -35,22 +35,169 @@ B 同样可以反向调用 A（对称，双方各跑同一个 `peer_node.lume`�
 LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32
 ```
 
+单机先跑通（最常见的第一步）：
+
+```bash
+cp .env.example .env    # 按需改 PEER_SHARED / PEER_TARGETS
+make peer-up            # agent-httpd(:18099) + peer_node(:18092)
+make peer-status
+```
+
+跨机再按下一节「跨机部署清单」逐项对齐。要手工起单个进程（调试用）：
+
 机器 B：
 
 ```bash
 PEER_SHARED=<同一个密钥> PEER_NAME=nodeB PEER_BIND=0.0.0.0 PEER_PORT=18092 \
-  ~/.local/bin/lume peer_node.lume
+  ../lume/bin/lume peer_node.lume
 ```
 
 机器 A 验活：
 
 ```bash
 PEER_SHARED=<同一个密钥> PEER_NAME=nodeA PEER_HOST=192.168.x.b:18092 \
-  ~/.local/bin/lume peer_probe.lume
+  ../lume/bin/lume peer_probe.lume
 ```
 
 `peer_probe.lume` 会跑 7 项检查，全过则 exit 0，否则 exit 为失败数。适合直接当
 部署后的验活命令，或塞进 launchd / CI。
+
+> ⚠️ **用仓库里的 lume，别用 `~/.local/bin/lume`。**
+> 后者是某个旧版本（本机是 10-23 构建），与工作区源码不一致：新语法/新类型
+> 规则它不认识，`--check` 会漏报；两个版本同时常驻还会争同一端口与同一份
+> db，数据时而正常时而全 0，极难排查。
+> 正确写法：`../lume/bin/lume peer_node.lume`。
+
+### 本机起一个「带 agent」的节点（验证提问链路）
+
+单纯的 `peer_node.lume` 只有数据端点，`/peer/ask` 会 404 —— 它背后没有 agent
+进程。要让看板的提问框可用，两个进程必须一起起：
+
+```bash
+make peer-up       # agent-httpd(:18099) + peer_node(:18092)，日志在 .runtime/
+make peer-status   # 两个进程是否在
+make peer-down     # 停掉
+```
+
+`make peer-up` **不会**自动改 `PEER_TARGETS` —— 探谁由人决定。要把自己也算进去：
+
+```bash
+PEER_TARGETS=127.0.0.1:18321,127.0.0.1:18092
+```
+
+验证：`python3 scripts/peers_fetch.py` 后看 `.data/peers.json` 里该节点的
+`agent` 字段。`true` 才会出现提问框；`false` 表示它只有数据工具（如博客）。
+
+### 提问要出真实答案，得配模型
+
+不配 `LLM_API_KEY` 时 agent-httpd 用**离线 demo 引擎**：逐词流式回一段固定说明，
+用来验证 SSE 通路，**不接任何模型**。所以「能问、有回答」≠「链路接了模型」。
+
+```bash
+export LLM_API_URL=https://api.deepseek.com/chat/completions
+export LLM_MODEL=deepseek-chat
+export LLM_API_KEY=<密钥>
+make peer-down && make peer-up     # 重启才生效（读的是进程环境）
+```
+
+这三个是 **agent-httpd 的环境变量**，不是看板的。
+
+## 跨机部署清单
+
+两台机器上跑同一套仓库时，按下面逐项对齐。**任何一项不一致，症状都很像"网络不通"**
+（连接被拒 / 全部 401 / 节点显示离线），所以先按这张表对，再去查网络。
+
+| 项 | 机器 A | 机器 B | 不一致的症状 |
+|---|---|---|---|
+| `PEER_SHARED`（或 `PEER_ROOT`） | 同一个值 | 同一个值 | 全部 401 `unauthorized:true` |
+| `PEER_NAME` | 各自不同（`nodeA` / `nodeB`） | 同左 | 两个节点互相覆盖成同一个 id |
+| `PEER_BIND` | `0.0.0.0` | `0.0.0.0` | 从对方连过来是「连接被拒」 |
+| `PEER_PORT` | 各应用固定（见下表） | 同左 | 探测超时 |
+| `PEER_TARGETS` | 写**对方**的 `LAN_IP:端口` | 写对方的 | 节点列表里看不到对方 |
+| 时钟 | 与对方偏差 < `PEER_SKEW_SECS` | 同左 | 随机 401（重放窗口外） |
+
+端口由各应用 Makefile 的 `PEER_PORT_RUN` 固定，不要改 `.env` 里的 `PEER_PORT` 期望覆盖它：
+
+| 应用 | peer 端口 | 说明 |
+|---|---|---|
+| `lume-lan` | 18092 | 看板，浏览器直连，通常必须 `0.0.0.0` |
+| `lume-crm` | 18102 | 客户/商机统计（只读） |
+| `lume-scanner` | 18103 | A 股扫描结果（只读） |
+| `lume-blog` | 18321 | 文章/统计（只读） |
+
+### `PEER_BIND` 从哪来
+
+`make peer-up` 会从**本仓库的 `.env`** 读 `PEER_BIND`，没写才用 `127.0.0.1`。
+改 `.env` 就生效，不用动 Makefile。
+
+> 历史坑：这几处曾经在 Makefile 里硬编码 `PEER_BIND=127.0.0.1`，于是 `.env` 里
+> 写 `PEER_BIND=0.0.0.0` 完全不生效，而文档说"配 PEER_BIND 即可"。这种
+> **配了不生效**比不支持更难排查——对端拿到的是连接被拒，一路被当成网络问题查。
+> 现在 `.env` 优先，且 `make -n peer-up` 能直接看到最终注入的值。
+
+自查命令（不用真起进程）：
+
+```bash
+make -n peer-up | grep -o 'PEER_BIND=[^ ]*' | sort -u
+# .env 未设 → PEER_BIND=127.0.0.1
+# .env 设了 0.0.0.0 → PEER_BIND=0.0.0.0
+```
+
+### 步骤
+
+1. **两边都置 `PEER_BIND=0.0.0.0`**（各应用 `.env`），起：
+
+   ```bash
+   make peer-up        # 各自的 peer_node
+   make peer-status    # 确认在听，且看得到绑定地址
+   ```
+
+2. 确认端口真在对外监听（而不是只听回环）：
+
+   ```bash
+   lsof -nP -iTCP:18092 -sTCP:LISTEN     # 期望 *:18092，不是 127.0.0.1:18092
+   ```
+
+3. **在 A 上把 B 加进探测列表**（`lume-lan/.env`）：
+
+   ```bash
+   PEER_TARGETS=127.0.0.1:18321,127.0.0.1:18102,127.0.0.1:18103,192.168.x.b:18092
+   ```
+
+   `PEER_TARGETS` 只影响"探测谁"，不影响"谁能连我"。反向也要连就见 B 的配置。
+
+4. 验活（不经过看板，直接测签名链路）：
+
+   ```bash
+   PEER_SHARED=<同一个密钥> PEER_NAME=nodeA PEER_HOST=192.168.x.b:18092 \
+     ../lume/bin/lume peer_probe.lume
+   ```
+
+   全过 exit 0。也可以直接看 Agent Card：
+
+   ```bash
+   curl -s http://192.168.x.b:18092/.well-known/agent-card.json | head -c 300
+   ```
+
+   返回 200 且带 `name`/`skills` = 网络与绑定都对；**这一步不需要签名**，所以它能
+   把"网络问题"和"密钥问题"分开。
+
+5. 看板侧：`make peers` 拉一遍，`.data/peers.json` 里出现对方节点，`agent: true`
+   才会出现提问框。
+
+### 跨机时的额外注意
+
+- **自注册目录是本地文件**（`PEER_REG_DIR`，默认 `.data/peers.d`），不会跨机器同步。
+  所以跨机必须用**白名单**（`peers-identity.json` / `PEER_TARGETS`）互相登记，
+  不能指望 A 自动发现 B。
+- **`PEER_SHARED` 是对称密钥**：任何持有它的节点都能冒充任何节点名。跨机等于
+  把"所有参与机器"放进同一个信任域——一台沦陷，等于全部沦陷。企业场景应换成
+  非对称签名（见「已知风险」）。
+- **传输是明文 HTTP**（见「明文传输的边界」），只传状态与任务指令，不传敏感串。
+  需要加密就在 lume 外做（WireGuard / SSH 隧道 / 反代 TLS）。
+- **不要暴露到公网**，也不要做端口转发。`/peer/invoke` 有工具白名单
+  （见下节「`/peer/invoke` 的工具白名单」），但它是"拒绝清单 + 危险动词"风格，
+  不是穷举许可 —— 能挡写/执行类动作，不等于能挡一切未知工具。
 
 ## 认证模型
 
@@ -70,6 +217,110 @@ POST → scope = "POST " + path_only + "\n" + body
 1. **`PEER_SHARED` 为空时整个 `/peer/*` 关闭**，不是放行。
 2. 密钥独立于看板的 `htpasswd` —— 一台机器沦陷不会连带另一台。
 3. 未签名 / 错密钥 / 过期 / 篡改，一律返回 `{ok:false, unauthorized:true}`。
+
+### 两种模式：对称（默认）与非对称（可选）
+
+上面那套是 **HMAC 对称**：所有节点共一个密钥，谁持有它，谁就能用**任何**节点名去签。
+也就是说它能防误连（配错 `PEER_TARGETS`、复制了别人的 `.env`），但**防不住恶意节点**。
+
+要根治这个，配 `PEER_PRIVKEY` 切到 **ed25519 非对称**：
+
+```
+sig = ed25519_sign(signing_string, 本节点私钥)
+验签 = ed25519_verify(signing_string, sig, 按 node 名查到的公钥)
+```
+
+待签串与对称模式**完全相同**（`node \n ts \n nonce \n scope`），只换算法 ——
+这样"有没有换过算法"不会体现在协议输入上，排障时可以拿同一个串两边对。
+
+| | 对称 HMAC（默认） | 非对称 ed25519 |
+|---|---|---|
+| 配置 | `PEER_SHARED` 一个共享密钥 | 每节点 `PEER_PRIVKEY` + 对端公钥表 |
+| 防误连 / 防串台 | ✅ | ✅ |
+| 防冒充 | ❌ 持钥者可冒充任意节点 | ✅ 没有别人私钥就签不出 |
+| 泄漏影响面 | 整个信任域沦陷 | 只影响泄漏的那一台 |
+| 新增节点 | 分发同一个密钥 | 交换公钥 |
+
+**为什么默认不切**：两种模式不能混跑——一边签一边验算法不同，会全部 401。
+切换需要所有节点同时改配置，这个决定应该由部署者做，不该由升级悄悄替你做。
+
+### 凭据优先级（配了多个时谁生效）
+
+三套凭据，优先级从高到低：
+
+```
+PEER_PRIVKEY  (ed25519)  >  PEER_ROOT  (derived)  >  PEER_SHARED  (shared)
+```
+
+**同时配多个时，低优先级的静默失效。** 这不是假设——实测四个节点里就有
+`PEER_SHARED` 和 `PEER_ROOT` 都配着的，实际跑的是 `derived`，从配置文件上
+完全看不出来。拿共享密钥去构造签名会一路 401，现象很像"密钥抄错了"。
+
+所以 `/peer/health` 会返回实际生效的模式，并在有配置被忽略时给出警告：
+
+```json
+{
+  "ok": true, "node": "crm", "peer": "client",
+  "mode": "derived",
+  "warnings": ["PEER_SHARED is set but ignored: PEER_ROOT takes precedence (mode=derived)"]
+}
+```
+
+启动日志同样会打出来（只在有警告时）：
+
+```
+[peer] signature mode: derived
+[peer] WARN PEER_SHARED is set but ignored: PEER_ROOT takes precedence (mode=derived)
+```
+
+看到这条就说明配置里有冗余项，删掉低优先级那个即可——**不要靠猜**。
+
+启用步骤（每台机器都做）：
+
+```bash
+# 1. 生成密钥对，私钥写文件、公钥记下来
+../lume/bin/lume -e 'print(json(ed25519_keypair()))'
+# => {"sk":"<64 hex>","pk":"<64 hex>"}
+
+# 2. 私钥落盘，只自己可读
+echo "<sk hex>" > .data/peer.sk && chmod 600 .data/peer.sk
+
+# 3. .env 里指过去
+PEER_PRIVKEY=.data/peer.sk
+PEER_PUBKEYS=.data/peers-pubkey.json
+
+# 4. 把每台机器的 node → pk 汇总进 peers-pubkey.json
+#    {"crm":"...","scanner":"...","blog":"..."}
+```
+
+公钥必须**通过可信渠道**登记（手工汇总、配置管理），不能从请求里取 ——
+从请求里取公钥等于让中间人自证身份。
+
+实测过的失败形态，都返回 `{ok:false, unauthorized:true}` 且错误信息能定位问题：
+
+| 情况 | error |
+|---|---|
+| 对方公钥没登记 | `no public key for peer 'x' (Peer needs PEER_PUBKEYS or self-registration)` |
+| 拿自己的私钥自称别人 | `bad signature for peer 'x'` |
+| 时间戳超窗 | `ts outside window (9999s)` |
+
+### 内置函数
+
+`ed25519_*` 已进 lume 语言层（`lume-core/src/compat/ed25519/`，RFC 8032 纯 C 实现），
+四个内建，全部 hex 字符串进 hex 字符串出：
+
+```lume
+ed25519_keypair()                    // → {sk, pk}
+ed25519_pubkey(sk_hex)               // → pk_hex
+ed25519_sign(msg, sk_hex)            // → sig_hex
+ed25519_verify(msg, sig_hex, pk_hex) // → bool（格式非法返回 false，不抛错）
+```
+
+`verify` 对畸形输入返回 `false` 而不是报错：抛错会变成 500，让"有人伪造签名"
+看起来像服务故障。
+
+⚠️ 该实现**未做侧信道加固**（没有常量时间标量乘）。对节点身份认证这个场景
+（固定身份、低频调用）够用；若要保护高价值密钥，应换 libsodium 之类加固实现。
 
 ## 实测踩到的坑
 
@@ -232,6 +483,50 @@ tasks/get                 → post_count: 102, history: 1
 既能控体积，又能证明「批的就是跑的这个」（参数一变摘要就变）。
 
 实测链路：`PENDING`（空回答）→ `PENDING`（"好像可以"被拒）→ `ALLOW`（"确认"）→ `task_finished`。
+
+### 第二份审计：`a2a_call`（调用本身）
+
+上面的 `approval_*` 回答的是**决策**问题（谁批了什么）。但排障时问的是另一个
+问题：**这一步到底发出去没有、走到哪一层断的**。两者混在一起会互相干扰，
+所以单列一类事件：
+
+```json
+{"event":"a2a_call","outcome":"ok","status":200,"elapsed_ms":0,
+ "target":"host.docker.internal:18321","method":"message/send",
+ "detail":"state=submitted role=agent_reviewer approve","origin":"lan-ui"}
+```
+
+`outcome` 刻意是**分类**而不是布尔：
+
+| outcome | 含义 | 该查什么 |
+|---|---|---|
+| `ok` | 对端正常处理 | — |
+| `unreachable` | 没连上 | 地址改写、隧道、容器网络 |
+| `denied` | 连上了但被拒 | 身份是否在 `peers-identity.json` 里 |
+| `bad_response` | 连通了但答的不对 | 对端版本、中间代理 |
+
+只记 `false` 的话，日志里全是一样的失败，分不出该查哪一层。
+
+### 两份审计为什么都要
+
+同一次调用可能在**两侧各有一条**：
+
+- `source: "lan-ui"` —— 看板自己发出的那一跳（`/app/audit/`，容器内追加写）
+- `source: "<执行方>"` —— 执行方收到并处理的（`<state>/.data/a2a-audit.jsonl`）
+
+这个组合本身就是诊断信息：
+
+| 看板侧 | 执行方侧 | 说明 |
+|---|---|---|
+| 有 | 有 | 完整往返，正常 |
+| 有 | 无 | **发出去没到**（这一侧是唯一线索） |
+| 无 | 有 | 不是从看板发起的（脚本 / CLI） |
+
+容器 `.data` 是 `:ro` 挂载的（看板被攻破不该能改宿主状态），所以看板侧的
+审计放在单独的可写卷 `./audit:/app/audit`；「改状态」和「记流水」权限分开。
+
+> 注意 lume 只有 `write_file`（原子覆盖），没有 append。追加只能
+> 「读全文 → 拼新行 → 整体写回」，因此单文件到 256 KiB 会轮转一份 `.1`。
 
 ### 多级审批链（agent 出场即带角色）
 
@@ -485,13 +780,82 @@ python3 scripts/a2a_probe.py http://127.0.0.1:18211
 
 实测两个节点各 21 项全过，博客回 `文章 102 篇…`，lan 回 agent 的真实作答。
 
+## `/peer/invoke` 的工具白名单
+
+实现：`src/peer_tool_policy.lume`（纯函数，可单测，不依赖进程启动）。
+
+**为什么 lan 需要而 crm/scanner 不那么需要**：crm/scanner 的工具是编译期写死的
+只读查询；lan 背后是能调**任意 MCP 工具**的通用 agent。不设限的话，持凭据的对端
+等于拿到了本机的文件写权限和记忆存储。
+
+### 两级策略
+
+区别不在动词，而在**改的是什么状态**：
+
+| 级别 | 覆盖的命名空间 | 规则 |
+|---|---|---|
+| **STRICT**（跨调用留存） | `memory__` `git__` `fs__` `code__` `exec__` `shell__` `docker__` | **默认拒**，只放过只读白名单 |
+| **SCOPED**（受限命名空间内生成） | `file__` `pptx__` `docx__` `xlsx__` `pdf__` `image__` | 允许创建/追加，**禁止覆盖删除** |
+| 其它 | 业务数据查询等 | 只拦破坏性 + 执行类动词 |
+
+为什么这样分——第一版把所有危险动词平铺成一张表，两头都出错：
+
+- **漏判**：`memory__create_entities` / `memory__add_observations` 是写操作，
+  但 `create`/`add` 不在表里。对端能往记忆里塞假事实，而塞进去的东西会被后续
+  推理当成真的。
+- **误伤**：补上 `create`/`add` 之后，`pptx__create` / `pptx__add_slide` 这些
+  正常文档生成一起被拒，把一个可用功能变成不可用。
+
+两者的差别不在动词而在状态：记忆/git/代码执行改的是**跨会话留存**的东西；
+工作区内的文件生成影响面有界。所以分开处理。
+
+### 实测行为
+
+```
+DENY   memory__create_entities    <- 跨边界写
+DENY   fs__write_file             <- 跨边界写（MCP_FS_ROOT 可能被配得很宽）
+DENY   git__push                  <- 仓库历史
+DENY   shell_exec                 <- 任意代码执行
+ALLOW  memory__read_graph         <- 只读白名单
+ALLOW  fs__read_file              <- 只读白名单
+ALLOW  pptx__create               <- SCOPED 生成，允许
+DENY   pptx__delete_slide         <- SCOPED 但破坏性
+ALLOW  crm__query                 <- 业务查询
+```
+
+**严格命名空间里没见过的名字默认拒**（fail-closed），因为那些工具一旦是写操作，
+后果跨会话留存——不给"猜错"的空间。
+
+### 清单会标注可用性，不隐藏
+
+`/peer/tools` 为每个工具返回 `peer_callable` 与 `peer_blocked_reason`：
+
+```json
+{"name": "fs__write_file", "peer_callable": false,
+ "peer_blocked_reason": "tool 'fs__write_file' under 'fs__' may change persisted state ...",
+ "when_to_use": "peer 面不可调用（...）。本机 agent 内部仍可用。"}
+```
+
+**不隐藏**的理由：隐藏会让"为什么调不通"变成谜（对端压根不知道有这个工具）；
+标注则让调用方在编排阶段就能排除，不必靠失败重试去发现。`when_to_use` 也一并
+改写——agent 读的是这段文字，"慎用"和"不可调用"对它的行为影响完全不同。
+
+### 边界（必须知道）
+
+`/peer/ask` 与 `/a2a` **不经过这层**。它们走 agent 推理，agent 在推理过程中可能
+自己决定调用工具。要收紧到那条路径，得在 agent-httpd 的工具注册表层面按调用来源
+区分权限——那是另一个量级的改动。
+
+把这层想成**关上了最容易开的那扇门**，不是封死了所有门。
+
 ## 已知风险
 
-1. **`/peer/invoke` 没有工具白名单。** 持有 `PEER_SHARED` 的对端可以调用本节点**任何**
-   已注册的 MCP 工具，包括 `fs__write_file` / `fs__edit_file` / `memory__delete_*`
-   这类写操作。跨机部署时这是最需要权衡的一点：
-   - 只用只读工具 → 建议在 `peer_node.lume` 的 `/peer/invoke` 里加工具名白名单；
-   - 需要写操作 → 至少确保 `PEER_SHARED` 不落在低信任设备上，且 peer 端口不暴露到公网。
+1. **`/peer/invoke` 的工具白名单（已实现，但有边界）。** 见下节。要点：
+   - 跨边界状态（`memory__` / `git__` / `fs__` / `code__` / `exec__` 等）
+     **默认拒**，只有只读白名单例外；
+   - 受限命名空间（`pptx__` / `docx__` / `xlsx__` …）允许创建、禁止覆盖删除；
+   - `/peer/ask` 与 `/a2a` **不经过**这层 —— agent 在推理中仍可能自己调工具。
+     那条路径要收紧，得在 agent-httpd 的注册表层按调用来源分权限。
 2. **明文传输**（见上节），签名不加密。
 3. **agent-httpd 未配 Basic Auth 时启动会打警告**（`WARNING: listening on 0.0.0.0
    without Basic Auth`）。peer 只连本机 agent（`127.0.0.1`），所以这条警告不影响
@@ -591,10 +955,8 @@ POST /peer/invoke  → {"tool":"<name>","arguments":{...}}
 `tools` 现在返回**真实 MCP 注册表**（本机 agent-httpd 的 `mcp_tool_count()`），
 不再是静态清单；agent 没起时降级为 `tools:[]` + `error` 说明。
 
-`/peer/invoke` 是**执行**类操作，安全上依赖两点：签名覆盖 body（改参数即失效），
-以及 `PEER_SHARED` 的共享范围。**服务端不做工具白名单** —— 拿到 key 的对端可以调用
-本节点任何已注册工具，包括 `fs__write_file` 这类写操作。如果这个范围太宽，应在上层
-加白名单（见下节「已知风险」）。
+`/peer/invoke` 是**执行**类操作，安全上依赖三层：签名覆盖 body（改参数即失效）、
+凭据的共享范围、以及**工具白名单**（见下节）。
 
 实测：跨节点拉到 28 个工具，远端执行 `echo__pong` 与 `fs__list_allowed_directories`
 均成功，未知工具返回 `502 + "error: unknown mcp tool ..."`。
@@ -631,9 +993,20 @@ portfolio-check / echo）和 erishen's blog（blog.stats、blog.recent）。
 
 ### 暴露策略（重要）
 
-`/peer/invoke` 在 lume-lan 侧**没有工具白名单**，如果全量挂给 agent，等于让
-agent 能跨节点执行 `fs__write_file` / `memory__delete_entities`。所以桥默认
-**只暴露只读工具**：
+这里说的是**客户端**（peer_bridge）的可见性过滤。**服务端**另有一层工具白名单
+（见下节「`/peer/invoke` 的工具白名单」），两层职责不同：
+
+| | 谁管 | 作用 |
+|---|---|---|
+| 服务端 `peer_tool_policy` | 被调用的节点 | 决定"能不能执行"，是**权威** |
+| 客户端 `PEER_EXPOSE` | 发起调用的桥 | 决定"要不要展示给 agent"，是**偏好** |
+
+服务端在 `/peer/tools` 里为每个工具返回 `peer_callable` 标注，客户端优先采信它
+——服务端比客户端更清楚自己配了哪些 MCP、哪些被策略拦下。客户端再维护一份独立
+词表只会和服务端漂移，而漂移的方向通常是"客户端以为能调、服务端拒绝"，表现为
+agent 反复试一个永远失败的工具。
+
+桥默认**只暴露只读工具**：
 
 | `PEER_EXPOSE` | 行为 |
 |---|---|

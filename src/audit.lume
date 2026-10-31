@@ -1,0 +1,109 @@
+// audit.lume — 容器侧的 A2A 调用审计(本地落盘)
+//
+// ── 为什么要在容器侧单独记一份 ──────────────────────────────────
+// 执行方(worker)已经会把**它发出**的调用记进 a2a-audit.jsonl。但看板自己
+// 发起的那一次(审批: peer.post_peer → 对端 /a2a)在到达执行方之前是"看不见"的:
+//   - 网络不通、对端 401、超时 —— 这些失败压根没到执行方, 它的日志里没有痕迹;
+//   - 到达了, 也只是一条 user message, 看不出是哪台机器、多快、走没走通隧道。
+// 排障时最需要回答的恰恰是"这一步到底出没出去、卡在哪", 所以看板侧必须
+// 自己留一份。
+//
+// ── 为什么不写 .data/ ─────────────────────────────────────────
+// 容器以 :ro 挂载 .data(见 docker-compose.yml): 那是有意的 —— 看板被攻破
+// 也不该能改宿主的快照与任务状态。审计日志不属于"状态", 它是追加写的流水,
+// 所以放在 /app/audit/(镜像内可写), 再由 compose 挂出来给宿主采集。
+//
+// ── 追加怎么写 ────────────────────────────────────────────────
+// lume 只有 write_file(原子写: 临时文件+rename), 没有 append。所以追加只能
+// 读全文→拼新行→整体写回。这带来两个后果, 都要认:
+//   1. 文件不能无限长 —— 超过上限就整体轮转(见 MAX_BYTES), 否则每次写都要
+//      读一遍越来越大的文件, 而且单次 write 有大小上限。
+//   2. 并发写会丢行 —— 多 worker 同时读-改-写, 后写的覆盖先写的。这里不引入
+//      文件锁: 审批是人手动触发的低频操作, 用锁的复杂度不值当; 丢的那一行
+//      在服务端(执行方)的审计里仍有记录, 不是唯一副本。
+
+let audit_dir = "/app/audit";
+let audit_path = audit_dir + "/a2a-ui-audit.jsonl";
+// 单文件上限。到顶就改名轮转(只留一份历史), 不做多代滚动 —— 审计主要是
+// 看最近发生了什么, 长期归档应该在宿主侧完成(采集脚本会合并两份)。
+let max_bytes_s = env("UI_AUDIT_MAX_BYTES");
+if (max_bytes_s == null) { max_bytes_s = "262144"; }   // 256 KiB
+
+// 是否启用。容器外跑(本地开发)时没有 /app/audit 的写权限语义, 也无需这份
+// 重复记录; 用 env 显式开关, 默认在容器里开。
+// 是否跑在容器里。
+//
+// 判断依据: mountinfo 里能看到容器运行时的痕迹。
+//   Docker/OrbStack → "- overlay overlay" 且 lowerdir 带 /var/lib/docker
+//   podman/libpod   → overlay 或 fuse-overlayfs + /var/lib/containers
+// 宿主(macOS)上没有 /proc, read_file 直接返回 null, 天然不会误判。
+//
+// 踩过的坑, 别再绕回去:
+//   /.dockerenv 是 0 字节文件, 而 lume 的 read_file() 对**空文件**返回 null
+//   (与"文件不存在"同一个值), 所以 `read_file("/.dockerenv") != null` 恒为
+//   false —— 容器检测永远失败, 表现为容器内仍打 127.0.0.1 而连接被拒。
+//   /proc/self/cgroup 也不行: cgroup v2 下容器和宿主都是 "0::/", 无法区分。
+export func in_container(): bool {
+  let mi = read_file("/proc/self/mountinfo");
+  if (mi != null) {
+    if (len(str_match("docker|libpod|containerd|overlay", mi)) > 0) { return true; }
+  }
+  let ce = read_file("/run/.containerenv");
+  if (ce != null) { return true; }
+  return false;
+}
+
+export func enabled(): bool {
+  let v = env("UI_AUDIT_ENABLED");
+  if (v != null and v == "0") { return false; }
+  return true;
+}
+
+// 轮转: a2a-ui-audit.jsonl → a2a-ui-audit.jsonl.1
+// 只留一代。这里不追求"永不丢", 追求"最近的完整" + 有界磁盘占用。
+func rotate_if_needed() {
+  let txt = read_file(audit_path);
+  if (txt == null) { return; }
+  if (len(txt) < int(max_bytes_s)) { return; }
+  // 没有 rename 内建, 只能 write 覆盖: 先整份写进 .1, 再把主文件清空。
+  // 中间那一瞬(gap)如果进程被杀, 主文件是空而 .1 完整 —— 丢的是"主文件
+  // 里原有的旧记录", 不是新记录; 采集脚本读两份, 所以不会整体消失。
+  write_file(audit_path + ".1", txt);
+  write_file(audit_path, "");
+}
+
+// 写一条。字段与会话侧(scripts/a2a_worker.py 的 audit_call)对齐, 便于
+// 采集时把两份记录按同一套列渲染。
+//
+// 返回是否写成功。写失败不抛错: 审计写不进去不该阻断审批本身,
+// 但调用方会把结果反映到 API 响应里(便于发现"审计没在工作")。
+export func write(id: string, target: string, method: string, outcome: string,
+                  status: int, elapsed_ms: int, detail: string) {
+  if (not enabled()) { return false; }
+  mkdir(audit_dir);
+  rotate_if_needed();
+  let row = {
+    at: int(now()),
+    event: "a2a_call",
+    origin: "lan-ui",
+    task_id: id,
+    target: target,
+    method: method,
+    outcome: outcome,
+    status: status,
+    elapsed_ms: elapsed_ms,
+    detail: detail,
+    node: self_node(),
+  };
+  let line = stringify(row);
+  let prev = read_file(audit_path);
+  if (prev == null) { prev = ""; }
+  let ok = write_file(audit_path, prev + line + "\n");
+  return ok != null;
+}
+
+func self_node(): string {
+  let n = env("PEER_NAME");
+  if (n == null) { return ""; }
+  return n;
+}

@@ -1,0 +1,216 @@
+// lume 的 import 不跨模块共享: 本文件用到的每一个模块都要自己声明,
+// 不能依赖 lan.lume 里 import 过的 approvals / lantbl / peer。
+import "../../lume-core/lib/peer.lume" as peer;
+import "devices.lume" as lantbl;
+import "approvals.lume" as approvals;
+import "audit.lume" as audit;
+
+// 审批写路径: POST /api/approve { id, decision: approve|reject, note? }
+//
+// 这一层是**看板唯一的写操作**, 所以规则写死在这里而不是散在 handler 里:
+//   前端只能表达"批/驳 + 理由", 不能表达"以谁的身份"。
+//   角色由服务端从任务链自算, 且必须等于本节点名(见 src/approvals.lume 头注释)。
+//
+// 落盘方式: 转成 A2A 的 message/send 续发给**执行方**(任务文件在它那儿),
+// 由它 append_message + 状态回到 submitted, worker 再拾起推进。
+// 走协议而不是直接改 JSON 文件, 是因为直接写会绕过执行方的状态机与审计,
+// 审计里就留不下"谁在什么时候批的" —— 那正是审批最需要留痕的部分。
+// 是否跑在容器里。
+//
+// 这个判断决定了 loopback 地址要不要改写成宿主机名 —— 改写**只在容器内**
+// 有意义: 容器里的 127.0.0.1 指向容器自己; 而在宿主上 127.0.0.1 就是对的,
+// 强行改写成 host.docker.internal 反而解析不了(宿主上没有这个名字)。
+// 实测踩过: 不分环境一律改写, 宿主上直接报 "name lookup failed"。
+
+post "/api/approve", (req) => {
+  let r = try(() => json(str(get(req, "body", ""))));
+  if (r.err != null) {
+    return { ok: false, error: "body 不是合法 JSON" };
+  }
+  let body = r.ok;
+  let id = str(get(body, "id", ""));
+  let decision = str(get(body, "decision", ""));
+  let note = str(get(body, "note", ""));
+
+  // id 直接拼进文件路径与 URL, 先卡白名单防穿越
+  if (len(id) == 0 or len(id) > 64 or len(str_match("[^a-zA-Z0-9_-]", id)) > 0) {
+    return { ok: false, error: "任务 id 不合法" };
+  }
+  if (decision != "approve" and decision != "reject") {
+    return { ok: false, error: "decision 只能是 approve 或 reject" };
+  }
+
+  let me = approvals.self_name();
+  if (len(me) == 0) {
+    return { ok: false, error: "本节点未配置 PEER_NAME, 无法确定以谁的身份审批" };
+  }
+
+  // 从快照里找这条任务, 拿到 来源/链/已批项/执行方地址。
+  // 用 peers_snapshot() 而不是 peers_payload(): 这里只要原始数据, 不需要
+  // 给界面准备的加工(annotate), 也不该在请求路径上重跑一遍采集逻辑。
+  let ps = lantbl.peers_snapshot();
+  if (ps == null) {
+    return { ok: false, error: "读不到 peer 快照, 无法确定这条任务该发给谁" };
+  }
+  let list = get(ps, "pending", []);
+  let task = null;
+  let i = 0;
+  while (i < len(list)) {
+    if (str(get(get(list, i, {}), "id", "")) == id) { task = get(list, i, {}); }
+    i = i + 1;
+  }
+  if (task == null) {
+    return { ok: false, error: "待办里没有这个任务(可能刚被别的节点处理完, 刷新看看)" };
+  }
+
+  // 谁能批: 自算, 不看前端
+  let chain = get(task, "policy", []);
+  let done_list = [];
+  let k = 0;
+  let approved = get(task, "approved", []);
+  while (k < len(approved)) {
+    push(done_list, { role: str(get(approved, k, "")), decision: "approve" });
+    k = k + 1;
+  }
+  let st = approvals.next_role(chain, done_list);
+  if (st.done) {
+    return { ok: false, error: "这条任务的审批链已终结, 无需再批" };
+  }
+  let need = str(st.role);
+  let need_node = str(st.node);
+  // 谁有资格批这一关: 链上的 **node** 字段, 不是 role。
+  // role(agent_reviewer / agent_reviewer_second / human_admin) 是**动作角色**,
+  // 说明"这一关要做的是哪类审查"; node 才是"由谁来做"。拿 role 跟本节点名比
+  // 永远不相等 —— 那会把所有关都挡掉, 表现为"看板永远批不了"。
+  //
+  // node 为空 = 人工终审(没有哪个 agent 节点能代替人)。这种情况下看板也不代办:
+  // 终审必须由人在后台完成, 看板只显示"等人工终审"。
+  if (len(need_node) == 0) {
+    return { ok: false,
+             error: "这一关是人工终审（" + need + "）, 看板不代为批准",
+             required_role: need, required_node: "" };
+  }
+  if (need_node != me) {
+    // 关键拒绝: 不是本节点这一关。前端按钮本不该出现, 但服务端仍要拦,
+    // 因为按钮是 UI 层的, 请求是可以手工构造的。
+    return { ok: false,
+             error: "当前应由 " + need_node + "（" + need + "）审核, 不是本节点（" + me + "）",
+             required_role: need, required_node: need_node };
+  }
+
+  // 续发给执行方。reply 文本与会话约定完全一致(`<role>: approve`),
+  // worker 的 parse_verdict 能直接认; reject 带上理由进审批记录。
+  // 来源标记: 让执行方在审计里能分清"看板点的"和"脚本/CLI 发的"。
+  // 看板这里是唯一的 UI 入口, 所以恒带 [via:lan-ui]; worker 侧
+  // last_user_origin() 认这个标记, 认不出就记 cli/unknown, 不猜。
+  // 注意标记放在角色前缀**之后**: parse_verdict 按第一个 ':' 切角色,
+  // 放前面会把 "approve [via:lan-ui]" 当成无法识别的动作。
+  let reply = need + ": " + decision;
+  if (decision == "reject" and len(note) > 0) { reply = reply + " " + note; }
+  reply = reply + " [via:lan-ui]";
+
+  let target = str(get(task, "target", ""));
+  if (len(target) == 0) {
+    // 任务没记执行方地址时退到 PEER_TARGETS 的第一个(单对端部署的常态)
+    let tg = get(ps, "targets", []);
+    if (len(tg) > 0) { target = str(get(tg, 0, "")); }
+  }
+  if (len(target) == 0) {
+    return { ok: false, error: "不知道该把审批发给哪个执行方(任务无 target, 也无 PEER_TARGETS)" };
+  }
+  // 地址改写: 快照里的 target 是**宿主视角**的地址(探测脚本在宿主跑, 对端多在
+  // 宿主 loopback 上, 所以是 127.0.0.1:18xxx)。容器里照这个地址发, 打的是
+  // 容器自己, 必然失败, 而报错只会是"连不上" —— 看起来像对端挂了。
+  // 把 loopback 改写成宿主机名即可; 局域网 IP / 主机名原样保留。
+  // str(null) 是字面量 "null"(4 字符)而不是空串 —— 只判 len>0 会把目标
+  // 改成 "null", 请求打到一个不存在的主机。审批路径踩过一次, 别再踩。
+  // 逐项映射优先(容器内按共享网别名直连), 其次才是单值覆盖。
+  let per = lantbl.map_target(target);
+  let mapped = lantbl.s_or_empty(get(ps, "container_target"));
+  if (len(per) > 0) {
+    target = per;
+  } else if (len(mapped) > 0) {
+    // 显式配置优先(多对端、要逐个改时用 PEER_CONTAINER_TARGETS)
+    target = mapped;
+  } else if (audit.in_container() and
+             len(str_match("^(127\\.0\\.0\\.1|localhost|\\[::1\\]):", target)) > 0) {
+    target = replace(target, "127.0.0.1:", "host.docker.internal:");
+    target = replace(target, "localhost:", "host.docker.internal:");
+    target = replace(target, "[::1]:", "host.docker.internal:");
+  }
+
+  // 组 JSON-RPC。手写字符串而不是 stringify: 这里结构固定, 少一层转义风险;
+  // 但 reply 是给人写的(可能带引号/换行), 必须先转义再拼进报文。
+  // lume 没有字符串切片/逐字节索引, 用 replace 链做转义:
+  // 顺序要紧 —— 反斜杠必须最先换, 否则后面补出来的 \ 会被再换一遍。
+  let safe = replace(reply, "\\", "\\\\");
+  safe = replace(safe, "\"", "\\\"");
+  safe = replace(safe, "\n", "\\n");
+  safe = replace(safe, "\r", "");
+  safe = replace(safe, "\t", " ");
+  let rpc = "{\"jsonrpc\":\"2.0\",\"id\":\"ui-approve\",\"method\":\"message/send\"," +
+            "\"params\":{\"id\":\"" + id + "\",\"message\":{\"role\":\"user\"," +
+            "\"parts\":[{\"kind\":\"text\",\"text\":\"" + safe + "\"}]}}}";
+
+  // 出站调用 + 逐路径审计。
+  //
+  // 这里每一类失败都单独记一条, 因为它们的**处理方式完全不同**:
+  //   unreachable  → 查地址/隧道/容器网络(先看 target 是不是改写过)
+  //   denied       → 对方活着但拒了(身份未注册、权限不足)
+  //   bad_response → 连通了但答的不是 JSON(对端版本不匹配/中间有代理)
+  // 只记一句"失败"的话, 事后完全分不出来该查哪一层。
+  //
+  // 耗时: lume 只有 now()(秒), 所以亚秒调用恒记 0 —— 这不是缺陷, 是如实反映
+  // 精度。真要毫秒得在 lume 里加内建, 不值得为一个审计字段动运行时。
+  let t0 = int(now());
+  // 超时 15s: 原值 8s 在"地址不可达"时不够 —— 连接会先挂在内核的
+  // SYN 重试上(实测 detail 里是 Connection timed out, 但 curl 还没返回),
+  // 于是前端看到的是请求超时, 而不是一条明确的"打不通"。
+  // 对可达对端没有影响(正常 <100ms), 只有异常路径会等满。
+  let res = peer.post_peer(target, "/a2a", rpc, 15);
+  let spent = int(now()) - t0;
+  if (spent < 0) { spent = 0; }
+
+  if (not get(res, "ok", false)) {
+    let e = str(get(res, "err", ""));
+    audit.write(id, target, "message/send", "unreachable",
+                int(get(res, "status", 0)), spent, e);
+    return { ok: false, error: "发给执行方失败: " + e };
+  }
+  let rj = get(res, "json", null);
+  if (rj == null) {
+    audit.write(id, target, "message/send", "bad_response",
+                int(get(res, "status", 0)), spent, "返回不是 JSON");
+    return { ok: false, error: "执行方返回的不是 JSON" };
+  }
+  let err = get(rj, "error", null);
+  if (err != null) {
+    let m = str(get(err, "message", ""));
+    audit.write(id, target, "message/send", "denied",
+                int(get(res, "status", 0)), spent, m);
+    return { ok: false, error: "执行方拒绝: " + m };
+  }
+  let result = get(rj, "result", null);
+  let new_state = "";
+  if (result != null) {
+    new_state = str(get(get(result, "status", {}), "state", ""));
+  }
+  // 让宿主立刻重采一次快照。快照是 peers_fetch 定时产的, 不主动触发的话
+  // 界面要等到下一轮才变 —— 用户点完按钮没反应, 会以为没生效而重复点。
+  // 标记文件只写一个时间戳; 采集循环看到新 mtime 就跑一轮。写不进去
+  // (DATA_MODE=ro)不算失败: 那只是"要等一会儿", 不影响审批本身已完成。
+  audit.write(id, target, "message/send", "ok",
+              int(get(res, "status", 0)), spent,
+              "state=" + new_state + " role=" + need + " " + decision);
+
+  let flag = env("PEER_REFRESH_FLAG");
+  if (flag != null and len(flag) > 0) { write_file(flag, str(now())); }
+  return {
+    ok: true,
+    id: id,
+    role: need,
+    decision: decision,
+    state: new_state,
+    target: target,
+  };
+};

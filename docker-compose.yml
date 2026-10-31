@@ -52,17 +52,78 @@ services:
       # ROUTER_PASS: "${ROUTER_PASS:-}"
       # WEBHOOK_URL: "${WEBHOOK_URL:-}"
       # WEBHOOK_SECRET: "${WEBHOOK_SECRET:-}"
-      # 局域网 Basic Auth: htpasswd 文件由 make docker-up 前的 .runtime/htpasswd 提供
-      # (生成: htpasswd -c -b -B -C 12 .runtime/htpasswd admin <密码>)
+      # 本机 Basic Auth: **默认关闭**。
+      #
+      # 为什么默认关: 这个容器只发布到 127.0.0.1(见上面 ports), 外部网络
+      # 根本连不进来 —— 认证的边际防护很小, 代价却是浏览器每次刷新都要
+      # 重新登录(Basic 的凭据缓存不可靠, 换个标签页/清缓存就没了)。
+      #
+      # 要开启(比如临时改 binds 到 0.0.0.0 让局域网访问):
+      #   make auth-pass                          # 生成 .runtime/htpasswd
+      #   KANBAN_AUTH=1 docker compose up -d      # 或 .env 里写 KANBAN_AUTH=1
+      # 只绑 127.0.0.1 时**不要**开 —— 那是纯粹的自我麻烦。
+      # ---- Basic Auth(默认关闭)见下方 entrypoint 的开关说明 ----
+      # 这里**固定**传路径: 认证是否生效由 entrypoint 决定要不要 export
+      # HTPASSWD_FILE。原因: compose 无法"有条件地不定义某个环境变量" ——
+      # ${VAR:+...} 为空时键仍在(值为 ""), 而 lume 把"变量存在"当启用,
+      # 于是 open("") 失败、日志刷 "cannot open htpasswd file: ", 容器反复重启。
+      # 实测踩过。所以把判断放进容器启动脚本, 它能真正决定要不要设这个变量。
       HTPASSWD_FILE: "/auth/htpasswd"
+      KANBAN_AUTH: "${KANBAN_AUTH:-}"
+
+      # ---- 审批写路径(「待办」上的批准/驳回按钮) ----
+      # 这一层需要容器能**签名打执行方**, 所以下面几个值必须进容器:
+      #   PEER_NAME 我是谁 / PEER_ROOT 怎么签 / PEER_TARGETS 发给谁。
+      # 只读采集(peers_fetch)不需要它们 —— 那是宿主的事; 但批准是容器发起的
+      # 出站请求, 没有身份就既签不出名也过不了对端校验。
+      #
+      # 留空则按钮全部不可用: /api/approve 会明确报"未配置 PEER_NAME",
+      # 而不是静默降级成匿名批准。
+      # 本机 agent 的地址: /api/chat 与 /peer/ask 都转发到它。
+      # 容器内要用 host.docker.internal(127.0.0.1 在容器里指自己)。
+      AGENT_URL: "${AGENT_URL:-http://host.docker.internal:18099}"
+      PEER_NAME: "${PEER_NAME:-}"
+      PEER_ROOT: "${PEER_ROOT:-}"
+      PEER_SHARED: "${PEER_SHARED:-}"
+      # 容器内的**出站**地址。宿主的 PEER_TARGETS 通常是 127.0.0.1:18321
+      # (对端跑在宿主 loopback), 但这个地址在容器里指向容器自己 —— 照原样
+      # 转发会得到"连不上", 看起来像对端挂了。这里做一次显式改写:
+      #   127.0.0.1:<port> / localhost:<port>  →  host.docker.internal:<port>
+      # Docker Desktop for Mac 已内置该域名; Linux 需 host-gateway(见下)。
+      PEER_CONTAINER_TARGETS: "${PEER_CONTAINER_TARGETS:-}"
+      # 审批后让宿主重采快照(否则要等下一轮定时采集, 界面看起来像"没生效")。
+      # DATA_MODE=rw 时才有效(要往 .data 里写标记)。
+      PEER_REFRESH_FLAG: "/app/.data/.peers-refresh"
+    extra_hosts:
+      # Linux 上 host.docker.internal 不自动存在; 这一行在 macOS 上无害,
+      # 在 Linux 上把宿主网关映射进去。两条路径共用一套 PEER_CONTAINER_TARGETS。
+      - "host.docker.internal:host-gateway"
     volumes:
       # 宿主 make scan / make router-fetch 产出的快照; 默认容器只读它出 /api/*(只 serve,
       # 不写宿主数据; 容器被攻破也改不了/删不了快照)。
       # 容器内自刷新(REFRESH=1)需写 .data → DATA_MODE=rw:  docker compose up -d 前
       # export DATA_MODE=rw(或 .env 加 DATA_MODE=rw)。
       - ./.data:/app/.data:${DATA_MODE:-ro}
+      # 容器侧 A2A 审计(看板自己发起的那一跳)。
+      # 为什么单独一个可写卷、而不是塞进 .data:
+      #   .data 是 :ro 挂载的(看板被攻破也不该能改宿主状态), 而审计是追加流水,
+      #   需要写。分开之后"改状态"和"记流水"是两件事, 权限可以各给各的。
+      # 宿主侧由 scripts/peers_fetch.py 合并进同一个审计视图。
+      - ./audit:/app/audit
       # 看板 Basic Auth 凭据(只读挂载, 不进镜像)
       - ./.runtime/htpasswd:/auth/htpasswd:ro
       # 可选: 路由凭据文件(若不用上面 ROUTER_PASS env)
       # - ./.env:/app/.env:ro
+    # 全用 map 形式: list 形式与本段的 map 键混用会让 YAML 解析器报错。
+    networks:
+      default: {}
+      # 跨应用共享网: 直接按别名访问各应用的 peer 节点(不经宿主端口)。
+      # 前提是那些应用的 peer 服务也接了这个网(见各自的 compose)。
+      #   crm-peer:18102  /  scanner-peer:18103
+      lume-peer-net: {}
     # network_mode: host   # Linux host 网络(打不通 NAT 时启用, 并去掉 ports)
+
+networks:
+  # 预先创建一次: docker network create lume-peer-net
+  lume-peer-net:
+    external: true

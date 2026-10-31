@@ -1,0 +1,250 @@
+import "../../lume-core/lib/peer.lume" as peer;
+import "devices.lume" as lantbl;
+import "audit.lume" as audit;
+import "peer/agent.lume" as agent;
+
+// peer_actions.lume — 看板上的「真正操作」: 调用对端工具 / 向对端 agent 提问
+//
+// ── 为什么要有这一层 ────────────────────────────────────────────
+// /api/peers 一直是**只读**的: 能看到对端有哪些工具, 却点不动。看板于是只能
+// 当"展示牌", 验证 A2A 是否可用还得手工 curl。这里补的就是那个缺口。
+//
+// ── 与审批路由的分工 ────────────────────────────────────────────
+// approve_route.lume 处理的是"待办任务上的一次状态推进"(有审批链、有角色约束);
+// 这里是"一次即时的读取型调用"(查一下统计/问一句话), 没有审批链 ——
+// 两者共用签名、地址改写、审计这些底层设施, 但语义不同, 所以分开。
+//
+// ── 安全边界 ────────────────────────────────────────────────────
+// 1. 工具名由**对端的能力清单**校验, 不接受任意名字 —— 否则这里就成了
+//    "打穿到对端任意工具"的跳板(lume-lan 自己挂了 MCP, 能调的东西远不止
+//    博客那两个只读工具)。
+// 2. 参数只允许透传 JSON 对象, 不允许拼字符串进 URL。
+// 3. 地址改写逻辑与审批共用一套(容器内 loopback → 宿主), 不另写一份。
+//
+// 依赖由调用方(lan.lume) import; 本文件只定义路由。
+
+// 把宿主视角的目标地址改写成容器内可用的地址。
+// 与 approve_route.lume 同一条规则: 只有真在容器里、且目标是 loopback 时才改。
+func effective_target(t: string, mapped: string): string {
+  // 逐项映射优先(见 devices.map_target): 容器内按共享网的别名直连,
+  // 不经宿主端口。
+  let per = lantbl.map_target(t);
+  if (len(per) > 0) { return per; }
+  // 注意 mapped 可能是字面量 "null": peers.json 里没有 container_target 时,
+  // json 解析出的是 null, 而 str(null) 得到的是 4 个字符的 "null" 而不是空串。
+  // 只判 len>0 会把目标改写成 "null", 请求于是打到一个不存在的主机 ——
+  // 表现为"调不通"或不返回数据, 但错误信息里看不出是这里的问题。
+  if (len(mapped) > 0 and mapped != "null") { return mapped; }
+  if (not audit.in_container()) { return t; }
+  if (len(str_match("^(127\\.0\\.0\\.1|localhost|\\[::1\\]):", t)) == 0) { return t; }
+  let out = replace(t, "127.0.0.1:", "host.docker.internal:");
+  out = replace(out, "localhost:", "host.docker.internal:");
+  out = replace(out, "[::1]:", "host.docker.internal:");
+  return out;
+}
+
+// 从快照里找某个节点的条目(按 target 或 name 匹配)。
+// 返回 null 表示没这个节点 —— 调用方据此报"未知节点", 而不是猜一个地址去打。
+export func find_peer(snap, key: string) {
+  let arr = get(snap, "peers", []);
+  let i = 0;
+  while (i < len(arr)) {
+    let p = get(arr, i, {});
+    if (str(get(p, "target", "")) == key or str(get(p, "name", "")) == key) {
+      return p;
+    }
+    i = i + 1;
+  }
+  return null;
+}
+
+// 该节点是否声明了这个工具。只认它自己 tools 清单里有的。
+export func peer_has_tool(p, name: string): bool {
+  let arr = get(p, "tools", []);
+  let i = 0;
+  while (i < len(arr)) {
+    if (str(get(get(arr, i, {}), "name", "")) == name) { return true; }
+    i = i + 1;
+  }
+  return false;
+}
+
+// ── POST /api/peer/invoke { peer, tool, arguments } ──────────────────
+// 在看板上直接调对端的一个工具, 结果原样返回(界面自己渲染)。
+post "/api/peer/invoke", (req) => {
+  let r = try(() => json(str(get(req, "body", ""))));
+  if (r.err != null) { return { ok: false, error: "body 不是合法 JSON" }; }
+  let body = r.ok;
+  let key = str(get(body, "peer", ""));
+  let tool_name = str(get(body, "tool", ""));
+  if (len(tool_name) == 0) { return { ok: false, error: "缺少 tool" }; }
+
+  let snap = lantbl.peers_snapshot();
+  if (snap == null) { return { ok: false, error: "读不到 peer 快照" }; }
+  let p = find_peer(snap, key);
+  if (p == null) { return { ok: false, error: "未知节点: " + key }; }
+  // 只允许调它自己声明过的工具: 否则这里会成为打穿到对端任意工具的跳板
+  // (lume-lan 自己挂了 MCP, 能调的东西远不止博客那两个只读查询)。
+  if (not peer_has_tool(p, tool_name)) {
+    return { ok: false, error: "节点 " + key + " 没有声明工具 " + tool_name };
+  }
+
+  let target = effective_target(lantbl.s_or_empty(get(p, "target")),
+                                lantbl.s_or_empty(get(snap, "container_target")));
+  let args = get(body, "arguments", {});
+  if (args == null) { args = {}; }
+  let payload = stringify({ "tool": tool_name, "arguments": args });
+
+  let t0 = int(now());
+  let res = peer.post_peer(target, "/peer/invoke", payload, 20);
+  let spent = int(now()) - t0;
+  if (spent < 0) { spent = 0; }
+
+  if (not get(res, "ok", false)) {
+    let e = str(get(res, "err", ""));
+    audit.write("", target, "peer/invoke", "unreachable",
+                int(get(res, "status", 0)), spent, e);
+    return { ok: false, error: "调不到 " + target + ": " + e };
+  }
+  let rj = get(res, "json", null);
+  if (rj == null) {
+    audit.write("", target, "peer/invoke", "bad_response",
+                int(get(res, "status", 0)), spent, "返回不是 JSON");
+    return { ok: false, error: "对端返回的不是 JSON" };
+  }
+  let ok = get(rj, "ok", false) == true;
+  // 失败时把**对端给的错误原因**一并记入审计。
+  // 只记 "denied" 等于记下"有人被拒了", 但看不出被拒的是策略拦截、工具不存在
+  // 还是密钥不对 —— 事后复盘时这几类的处置完全不同。
+  let detail = tool_name;
+  if (not ok) {
+    let why = str(get(rj, "error", ""));
+    if (len(why) > 0) { detail = tool_name + ": " + why; }
+  }
+  audit.write("", target, "peer/invoke",
+              ok ? "ok" : "denied",
+              int(get(res, "status", 0)), spent, detail);
+  return {
+    ok: ok,
+    "tool": tool_name,
+    target: target,
+    elapsed_ms: spent,
+    result: get(rj, "result", ""),
+    error: get(rj, "error", ""),
+    agent_status: get(rj, "agent_status", 0),
+  };
+};
+
+// ── POST /api/peer/ask { peer, question } ────────────────────────────
+// 让对端的 agent 回答一句话。走 /peer/ask(签名端点), 不是 A2A 的 message/send:
+// 后者是公开端点、异步落任务, 适合"要办事"; 这里要的是"问一句立刻答",
+// 同步更合适, 且失败点更少(不涉及任务状态机)。
+post "/api/peer/ask", (req) => {
+  let r = try(() => json(str(get(req, "body", ""))));
+  if (r.err != null) { return { ok: false, error: "body 不是合法 JSON" }; }
+  let body = r.ok;
+  let key = str(get(body, "peer", ""));
+  let q = str(get(body, "question", ""));
+  if (len(q) == 0) { return { ok: false, error: "问题不能为空" }; }
+
+  let snap = lantbl.peers_snapshot();
+  if (snap == null) { return { ok: false, error: "读不到 peer 快照" }; }
+  let p = find_peer(snap, key);
+  if (p == null) { return { ok: false, error: "未知节点: " + key }; }
+  // 没有 agent 的节点(纯数据节点)不该被问: 它没有 /peer/ask 路由, 直接打会
+  // 拿到 404 的 HTML, 前端只看到"返回不是 JSON" —— 说不清问题在哪。
+  // 探测阶段已经把这件事查清楚了(peers_fetch 的 /peer/agent), 这里直接引用。
+  if (get(p, "agent", false) != true) {
+    return { ok: false, error: "节点 " + key + " 没有可问答的 agent(只有数据工具)" };
+  }
+
+  let target = effective_target(lantbl.s_or_empty(get(p, "target")),
+                                lantbl.s_or_empty(get(snap, "container_target")));
+  let payload = stringify({ "question": q });
+
+  let t0 = int(now());
+  let res = peer.post_peer(target, "/peer/ask", payload, 60);
+  let spent = int(now()) - t0;
+  if (spent < 0) { spent = 0; }
+
+  if (not get(res, "ok", false)) {
+    let e = str(get(res, "err", ""));
+    audit.write("", target, "peer/ask", "unreachable",
+                int(get(res, "status", 0)), spent, e);
+    return { ok: false, error: "问不到 " + target + ": " + e };
+  }
+  let rj = get(res, "json", null);
+  if (rj == null) {
+    audit.write("", target, "peer/ask", "bad_response",
+                int(get(res, "status", 0)), spent, "返回不是 JSON");
+    return { ok: false, error: "对端返回的不是 JSON" };
+  }
+  if (not get(rj, "ok", false)) {
+    let e = str(get(rj, "error", "对端拒绝"));
+    audit.write("", target, "peer/ask", "denied",
+                int(get(res, "status", 0)), spent, e);
+    return { ok: false, error: e };
+  }
+  audit.write("", target, "peer/ask", "ok",
+              int(get(res, "status", 0)), spent, "answered");
+  return {
+    ok: true,
+    target: target,
+    elapsed_ms: spent,
+    answer: get(rj, "answer", ""),
+    notes: get(rj, "notes", []),
+    // agent 没起时 answer 会是空: 把可达性一并带回去, 界面能说清"为什么空"
+    agent_ok: get(rj, "agent_ok", null),
+  };
+};
+
+// ── POST /api/chat { message, sessionId } ───────────────────────────
+// 和本机 agent 对话。这是看板上唯一"问一句话、它自己去查资料"的入口。
+//
+// 为什么走同步而不是把 SSE 直接透传:
+//   lume 的 http_post 是**收完整个响应**才返回(agent.lume 的 ask 就是这样),
+//   没法做"边收边转发"。所以这里等 agent 答完再一次性回给前端。
+//   代价是长回答要等; 收益是实现简单、失败点少(不用管流中断)。
+//   前端用"等待中"提示 + 工具轨迹让等待可见。
+//
+// 返回里带 notes: agent 每轮调用工具的痕迹(如 peers__crm__crm.stats)。
+// 这是让用户知道"它查了什么"的关键 —— 否则只看到一个答案, 不知道数据哪来的。
+post "/api/chat", (req) => {
+  let r = try(() => json(str(get(req, "body", ""))));
+  if (r.err != null) { return { ok: false, error: "body 不是合法 JSON" }; }
+  let body = r.ok;
+  let msg = str(get(body, "message", ""));
+  let sid = str(get(body, "sessionId", ""));
+  if (len(msg) == 0) { return { ok: false, error: "消息不能为空" }; }
+
+  // 先探活: agent 没起时给出明确原因, 而不是让前端等一个超时。
+  let ping = agent.ping();
+  if (not get(ping, "ok", false)) {
+    return { ok: false,
+             error: "本机 agent 不可达(" + agent.endpoint() + "): " + str(get(ping, "error", "")) +
+                    " —— 先 make peer-up" };
+  }
+
+  let t0 = int(now());
+  let res = agent.ask(msg, sid);
+  let spent = int(now()) - t0;
+  if (spent < 0) { spent = 0; }
+
+  if (not get(res, "ok", false)) {
+    audit.write("", agent.endpoint(), "react/api/chat", "denied",
+                int(get(res, "status", 0)), spent, str(get(res, "error", "")));
+    return { ok: false, error: str(get(res, "error", "agent 调用失败")),
+             elapsed_ms: spent };
+  }
+
+  audit.write("", agent.endpoint(), "react/api/chat", "ok",
+              int(get(res, "status", 0)), spent, "events=" + str(get(res, "events", 0)));
+  return {
+    ok: true,
+    answer: str(get(res, "answer", "")),
+    // 工具轨迹: 前端据此显示"它查了哪些节点"
+    notes: get(res, "notes", []),
+    elapsed_ms: spent,
+    complete: get(res, "complete", false),
+  };
+};

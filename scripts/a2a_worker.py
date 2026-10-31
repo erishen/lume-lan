@@ -44,8 +44,13 @@ import urllib.error
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TASK_DIR = os.path.join(ROOT, ".data", "a2a-tasks")
-ENV = os.path.join(ROOT, ".env")
+# 任务目录默认是本仓库的 .data/a2a-tasks; 但看板(lume-lan)也要能替**别的**
+# 节点跑 worker(比如本机同时起着 lume-blog, 它的任务在 ../lume-blog/.data)。
+# 写死 ROOT 会让 worker 扫错目录、任务永远停在 submitted —— 而且不报错,
+# 从日志上只能看出"扫到了 0 个任务", 很难联想到是路径问题。
+TASK_DIR = (os.environ.get("A2A_TASK_DIR") or "").strip() \
+    or os.path.join(ROOT, ".data", "a2a-tasks")
+ENV = (os.environ.get("A2A_ENV_FILE") or "").strip() or os.path.join(ROOT, ".env")
 
 POLL_SECS = 2
 TTL_SECS = 86400
@@ -73,7 +78,14 @@ def load_env() -> dict:
 
 ENV_VALS = load_env()
 SHARED = (ENV_VALS.get("PEER_SHARED") or "").strip()
-NODE = (ENV_VALS.get("PEER_NAME") or "a2a-worker").strip()
+# 本节点名。**必须**是注册表里有的名字, 否则签名出去会被对端拒。
+# 之前回退成 "a2a-worker" 是个陷阱: 那个名字不在任何 peers-identity.json 里,
+# 于是每一次 peer_call 都得到 "unknown peer 'a2a-worker' (not in registry)",
+# 而日志里只有一句 failed, 看不出是配置缺失而不是网络问题。
+# 现在: 没有 PEER_NAME 就在启动时明确告警, 并保留一个显眼的后缀。
+NODE = (ENV_VALS.get("PEER_NAME") or "").strip()
+if not NODE:
+    NODE = "a2a-worker-unconfigured"
 # 身份可信层: 配了 PEER_ROOT 就用「本节点派生密钥」签名, 与
 # lume-core/lib/identity.lume 的 key_for() 逐字节一致。
 PEER_ROOT = (ENV_VALS.get("PEER_ROOT") or "").strip()
@@ -102,7 +114,47 @@ def _sig(ts: str, nonce: str, scope: str) -> str:
     return hmac.new(key.encode(), msg, hashlib.sha256).hexdigest()
 
 
+# peer_call 的"上次调用"槽位: status / elapsed_ms / resp_bytes。
+# 为什么用全局而不是返回值多塞几个字段: 这两个值只在审计里用, 让每个调用方都
+# 解包一个四元组会把业务代码搅乱; 且 peer_call 是唯一的出站收敛点, 槽位够用。
+_LAST_CALL = {"status": 0, "elapsed_ms": 0, "resp_bytes": 0}
+
+
+def audit_call(task_id: str, target: str, method: str, outcome: str,
+               detail: str = "", **extra) -> None:
+    """记一条 A2A 出站调用。
+
+    与 approval_* 事件分开记, 因为它们回答的是不同问题:
+      approval_*  → "谁批准了什么"(决策链, 用于合规追溯)
+      a2a_call    → "发起了什么、对端怎么答、多快"(链路健康, 用于排障与 SLA)
+
+    字段取舍:
+      - 记 method 与 path 而不记完整 body: body 可能带别家数据, 记摘要就够复现;
+      - 记 status 与 elapsed_ms: 排查"慢"和"对端 5xx"全靠这两个;
+      - 记 outcome(ok/denied/unreachable/bad_response)而不是布尔: 失败要能分类,
+        否则日志里全是 false, 分不清是网络问题还是被对方拒绝。
+    """
+    entry = {
+        "event": "a2a_call",
+        "task_id": task_id,
+        "target": target,
+        "method": method,
+        "outcome": outcome,
+        "detail": detail[:200],
+        "status": int(_LAST_CALL.get("status") or 0),
+        "elapsed_ms": int(_LAST_CALL.get("elapsed_ms") or 0),
+        "resp_bytes": int(_LAST_CALL.get("resp_bytes") or 0),
+        "by_node": NODE,
+    }
+    entry.update(extra)
+    audit(entry)
+
+
 def peer_call(target: str, path: str, body: str) -> tuple:
+    """签名 POST 到对端。返回 (ok, payload)，并顺带把 (status, elapsed_ms) 记到
+    最近一次调用的槽位上，供 audit_call() 取用 —— 审计要记"多快、返回什么"，
+    而这两个值在异常路径上只有这里拿得到。"""
+    global _LAST_CALL
     ts = str(int(time.time()))
     nonce = secrets.token_hex(16)
     scope = f"POST {path}\n{body}"
@@ -110,12 +162,23 @@ def peer_call(target: str, path: str, body: str) -> tuple:
     req = urllib.request.Request(
         f"http://{target}{path}?{q}", data=body.encode(),
         headers={"Content-Type": "application/json"})
+    t0 = time.monotonic()
     try:
         with urllib.request.urlopen(req, timeout=TASK_MAX_SECS) as r:
-            return True, json.loads(r.read(1 << 20) or b"{}")
+            raw = r.read(1 << 20)
+            _LAST_CALL = {"status": int(getattr(r, "status", 200)),
+                          "elapsed_ms": int((time.monotonic() - t0) * 1000),
+                          "resp_bytes": len(raw)}
+            return True, json.loads(raw or b"{}")
     except urllib.error.HTTPError as e:
+        _LAST_CALL = {"status": int(e.code),
+                      "elapsed_ms": int((time.monotonic() - t0) * 1000),
+                      "resp_bytes": 0}
         return False, {"error": f"HTTP {e.code}"}
     except (urllib.error.URLError, socket.timeout, OSError) as e:
+        _LAST_CALL = {"status": 0,
+                      "elapsed_ms": int((time.monotonic() - t0) * 1000),
+                      "resp_bytes": 0}
         return False, {"error": str(getattr(e, "reason", e))}
 
 
@@ -167,7 +230,7 @@ def transition(path: str, task: dict, state: str, artifacts,
 # 形状照 knowledge/shared/abac.lume 的 audit_write: JSONL 追加, 每行一条,
 # `at` 是 unix 秒。它是 peer 审批唯一的「谁在什么时候批了什么」的证据 ——
 # 任务文件的 history 只记对话, 不记决策。
-AUDIT_PATH = os.path.join(ROOT, ".data", "a2a-audit.jsonl")
+AUDIT_PATH = (os.environ.get("A2A_AUDIT_PATH") or "").strip() or os.path.join(os.path.dirname(TASK_DIR.rstrip("/")), "a2a-audit.jsonl")
 
 
 def audit(entry: dict) -> None:
@@ -222,6 +285,22 @@ def last_user_text(task: dict) -> str:
             if parts:
                 return str(parts[0].get("text", ""))
     return ""
+
+
+def last_user_origin(task: dict) -> str:
+    """这条审批是从哪来的。
+
+    审计里最常被问的两个问题是"谁批的"和"从哪批的"。actor 一直留空是因为
+    A2A 的 message 里没有"发起方"字段 —— 但**来源**可以靠约定带过来:
+    看板(approve_route.lume)会在消息里带上 `[via:lan-ui]` 标记, 脚本/CLI
+    走的是裸 `role: approve`。没有标记一律记 `unknown`, 不猜。
+    """
+    text = last_user_text(task)
+    if "[via:lan-ui]" in text:
+        return "lan-ui"
+    if text:
+        return "cli"
+    return "unknown"
 
 
 def is_approved(text: str) -> bool:
@@ -361,7 +440,10 @@ def parse_verdict(text: str) -> dict:
     **当前待审角色**批(role 留空, 由调用方补 need)。认不出就 decision=""。
     这样既让人能直接回 yes, 又允许明确指定身份。
     """
-    t = text.strip()
+    # 先剥来源标记([via:lan-ui] 等), 否则 "approve [via:lan-ui]" 会因为
+    # 尾部多了标记而匹配不上 body 的精确比较, 被当成"不是审批指令" ——
+    # 任务于是停在 input-required 原地不动, 看起来像看板批了却没生效。
+    t = text.replace("[via:lan-ui]", "").strip()
     if not t:
         return {"role": "", "decision": ""}
     low = t.lower()
@@ -422,7 +504,11 @@ def run_task(path: str, task: dict) -> None:
                 need_node, need_why = st.get("node", ""), st.get("why", "")
                 break
         who = f"{need}（{need_node}）" if need_node else need
-        actor = payload.get("_actor") or ""          # 谁在批(节点名)
+        # 谁在批: actor 是节点名, origin 是入口(lan-ui / cli)。
+        # 之前 actor 恒为 payload._actor, 而那个键从来没人写 —— 于是审计里
+        # "谁批的"永远是空。改成从消息来源推, 至少能区分"看板点的"和"脚本发的"。
+        origin = last_user_origin(task)
+        actor = payload.get("_actor") or (NODE if origin == "lan-ui" else "")
         role_of_actor = payload.get("_actor_role") or ""
 
         # 客户端这一轮的回答是不是"用以审批"的?
@@ -433,11 +519,16 @@ def run_task(path: str, task: dict) -> None:
         claim_role = parsed["role"] or need
 
         if verdict == "":
-            # 不是审批指令 -> 继续等, 并把"该谁审"讲清楚
-            what = payload.get("approve_prompt") or (
+            # 不是审批指令 -> 继续等, 并把"该谁审"讲清楚。
+            # 注意用 `or` 兜底: 早期版本把整个 stage 对象当成角色名插进了
+            # 提示里(打印出一大段 JSON)。那种文案一旦落盘就会一直留在任务上,
+            # 所以这里**只信 payload.approve_prompt 是这次现算的**——现算的
+            # 一定比历史文案准, 因此优先现算, 历史值仅在算不出时用。
+            computed = (
                 f"即将执行 {payload.get('tool', '?')}，当前需 {who} 审核。"
                 + (f"（{need_why}）" if need_why else "")
                 + f"回复「{need}: approve」或「{need}: reject <理由>」。")
+            what = computed if need else (payload.get("approve_prompt") or computed)
             transition(path, task, "input-required", [], msg_text=what)
             audit({"event": "approval_required", "task_id": tid,
                    "tool": payload.get("tool", ""), "target": payload.get("target", ""),
@@ -446,7 +537,10 @@ def run_task(path: str, task: dict) -> None:
             return
 
         # 走引擎判定: 这个角色能不能做这个动作, 且是不是轮到他
-        res = approval_try(chain, approvals, claim_role, actor, verdict, answer[:200])
+        # 剥掉来源标记再入库: 它是传输层的注记, 不该出现在审批记录/产物里,
+        # 否则下游(驳回理由展示、审计回放)会看到一串内部标记。
+        clean = answer.replace("[via:lan-ui]", "").strip()
+        res = approval_try(chain, approvals, claim_role, actor, verdict, clean[:200])
         if not res["ok"]:
             # 越权/抢批 -> 驳回这次尝试, 任务继续停在原关
             transition(path, task, "input-required", [], msg_text=(
@@ -461,7 +555,8 @@ def run_task(path: str, task: dict) -> None:
         payload["_approvals"] = res["approvals"]
         task.setdefault("metadata", {})["payload"] = payload
         audit({"event": "approval_step", "task_id": tid,
-               "role": claim_role, "actor": actor, "decision": verdict.upper(),
+               "role": claim_role, "actor": actor, "origin": origin,
+               "decision": verdict.upper(),
                "next_role": res["next_role"], "chain_done": res["done"]})
 
         if res["rejected"]:
@@ -502,11 +597,17 @@ def run_task(path: str, task: dict) -> None:
         body = json.dumps({"tool": tool, "arguments": args}, ensure_ascii=False)
         ok, res = peer_call(target, "/peer/invoke", body)
         if not ok:
+            # 网络层失败也要留审计 —— 否则"任务为什么失败"只剩一句
+            # "对端不可达", 看不出是超时、连接被拒还是 DNS 问题。
+            audit_call(tid, target, "peer/invoke", "unreachable",
+                       str(res.get("error", "")), tool=tool)
             transition(path, task, "failed",
                        [artifact(f"对端不可达: {res.get('error', '')}")])
             log(f"task {tid}: failed (unreachable {target})")
             return
         if not res.get("ok"):
+            audit_call(tid, target, "peer/invoke", "denied",
+                       str(res.get("error", "")), tool=tool)
             transition(path, task, "failed",
                        [artifact(f"执行失败: {res.get('error', '')}")])
             log(f"task {tid}: failed ({res.get('error', '')[:80]})")
@@ -515,6 +616,8 @@ def run_task(path: str, task: dict) -> None:
         text = result if isinstance(result, str) else json.dumps(
             result, ensure_ascii=False, indent=2)
         transition(path, task, "completed", [artifact(text)])
+        audit_call(tid, target, "peer/invoke", "ok",
+                   f"result_len={len(text)}", tool=tool)
         audit({"event": "task_finished", "task_id": tid, "state": "completed",
                "tool": tool, "target": target, "result_len": len(text),
                "payload_digest": payload_digest(payload)})
@@ -539,10 +642,22 @@ def run_task(path: str, task: dict) -> None:
         # /a2a 不走签名(公开端点), 直接 POST
         req = urllib.request.Request(f"http://{target}/a2a", data=body.encode(),
                                      headers={"Content-Type": "application/json"})
+        # 这里不走 peer_call(两者签名/重试策略不同), 但仍要把
+        # status/elapsed 填进同一个槽位, 保证 audit_call 两种路径口径一致。
+        import time as _t
+        _t0 = _t.monotonic()
         try:
             with urllib.request.urlopen(req, timeout=TASK_MAX_SECS) as r:
-                resp = json.loads(r.read(1 << 20) or b"{}")
+                _raw = r.read(1 << 20)
+                _LAST_CALL.update(status=int(getattr(r, "status", 200)),
+                                  elapsed_ms=int((_t.monotonic() - _t0) * 1000),
+                                  resp_bytes=len(_raw))
+                resp = json.loads(_raw or b"{}")
         except Exception as e:  # noqa: BLE001
+            _LAST_CALL.update(status=0,
+                              elapsed_ms=int((_t.monotonic() - _t0) * 1000),
+                              resp_bytes=0)
+            audit_call(tid, target, "message/send", "unreachable", str(e))
             transition(path, task, "failed", [artifact(f"转发失败: {e}")])
             return
         t2 = resp.get("result") or {}
@@ -553,10 +668,16 @@ def run_task(path: str, task: dict) -> None:
             text = next((p.get("text", "") for p in parts
                          if p.get("kind") == "text"), "")
             transition(path, task, "completed", [artifact(text)])
+            audit_call(tid, target, "message/send", "ok",
+                       f"state={state2} result_len={len(text)}")
             audit({"event": "task_finished", "task_id": tid, "state": "completed",
                    "tool": "dispatch", "target": target,
                    "result_len": len(text), "payload_digest": payload_digest(payload)})
         else:
+            # 对端答了但状态不对(如 failed / input-required): 这不是网络问题,
+            # 单独归一类 bad_response, 否则排障时会误以为是连接不稳。
+            audit_call(tid, target, "message/send", "bad_response",
+                       f"state={state2 or '(空)'}")
             transition(path, task, "failed",
                        [artifact(f"对端状态 {state2}: {json.dumps(t2, ensure_ascii=False)[:200]}")])
         log(f"task {tid}: completed via dispatch")
@@ -614,7 +735,10 @@ def main() -> int:
         n = tick()
         print(f"processed {n} task(s)")
         return 0
-    log(f"a2a worker started (dir={TASK_DIR}, poll={POLL_SECS}s, ttl={TTL_SECS}s)")
+    log(f"a2a worker started (dir={TASK_DIR}, poll={POLL_SECS}s, ttl={TTL_SECS}s, node={NODE})")
+    if NODE.endswith("-unconfigured"):
+        log("WARNING: 未配置 PEER_NAME —— 签名将对端拒绝(unknown peer)。"
+            "在执行方的 .env 里设 PEER_NAME=<注册表里的名字>, 如 lan")
     while True:
         try:
             tick()

@@ -9,9 +9,26 @@ mkdir -p .data .runtime
 
 # Lume 默认绑 127.0.0.1; 容器内开放到 0.0.0.0, 让 docker -p 能映射进来
 export LUME_BIND="${LUME_BIND:-0.0.0.0}"
-# 可选 Basic Auth: 注入 HTPASSWD_FILE 才开(公网部署才需要, 容器内用可省)
-if [ -n "${HTPASSWD_FILE:-}" ]; then
+# ---- Basic Auth: 由 KANBAN_AUTH 决定, 默认关 ----
+#
+# 为什么需要在容器里判断, 而不是 compose 里用 ${VAR:+...}:
+# compose 没法"有条件地不定义某个环境变量" —— 空值时会留下一个值为 "" 的键,
+# 而 lume 把"变量存在"就当作启用了认证, 于是去 open("") 失败, 日志刷
+# "cannot open htpasswd file: "(后面是空的), 容器被 restart 策略反复重启。
+#
+# 所以这里显式 unset: 关闭时变量真的不存在, lume 走"无认证"分支。
+if [ -n "${KANBAN_AUTH:-}" ]; then
+  if [ ! -f "${HTPASSWD_FILE:-}" ]; then
+    echo "✗ KANBAN_AUTH 已开但找不到 ${HTPASSWD_FILE:-/auth/htpasswd}" >&2
+    echo "  先 make auth-pass 生成 .runtime/htpasswd" >&2
+    exit 1
+  fi
   echo "auth: Basic Auth via $HTPASSWD_FILE"
+else
+  # 默认关闭: 容器只发布到 127.0.0.1, 外部连不进来, 认证收益小,
+  # 而 Basic 的凭据缓存不可靠(每次刷新都要重登)。
+  unset HTPASSWD_FILE
+  echo "auth: disabled (本机部署默认; 要开启: KANBAN_AUTH=1)"
 fi
 
 LUME_VER="$(lume --version 2>/dev/null | head -1 || echo lume)"

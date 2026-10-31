@@ -20,6 +20,8 @@ let dns_path = ".data/dns.json";
 // 可互访的 lume peer 节点(.data/peers.json, 宿主 scripts/peers_fetch.py 产出)。
 // 与 devices/router/dns 同一套「宿主采集 → 容器只读」分工: 容器在 Docker NAT
 // 网段里连不到宿主 loopback 上的 peer 端口, 所以探测放在宿主, 这里只读快照。
+import "approvals.lume" as approvals;
+
 let peers_path = ".data/peers.json";
 // 快照「过期」阈值(秒):超过就提示前端重新 make scan。可经 env 覆盖。
 let stale_secs = env("LAN_STALE_SECS");
@@ -233,6 +235,96 @@ export func router_payload() {
 
 // 可互访的 lume 应用:读 .data/peers.json(宿主 peers_fetch.py 探测产出)。
 // 缺文件 → available=false(提示去配 PEER_SHARED / PEER_TARGETS), 不 500。
+// 给待办补"轮到我了吗"。字段命名与 /api/approve 返回保持一致,
+// 前端只读不算, 判定权仍在服务端。
+func annotate(list) {
+  let me = env("PEER_NAME");
+  if (me == null) { me = ""; }
+  let out = [];
+  let i = 0;
+  while (i < len(list)) {
+    let t = get(list, i, {});
+    let chain = get(t, "policy", []);
+    let done_list = [];
+    let approved = get(t, "approved", []);
+    let k = 0;
+    while (k < len(approved)) {
+      push(done_list, { role: str(get(approved, k, "")), decision: "approve" });
+      k = k + 1;
+    }
+    let st = approvals.next_role(chain, done_list);
+    let need_node = str(st.node);
+    // 能批的三个条件: 链没完、这一关有具体节点(node 为空=人工终审)、
+    // 那个节点就是我。任一不满足都给 false 并说明原因。
+    let mine = (not st.done) and len(need_node) > 0 and need_node == me;
+    let why = "";
+    if (st.done) { why = "审批链已终结"; }
+    else if (len(need_node) == 0) { why = "人工终审, 看板不代办"; }
+    else if (need_node != me) { why = "等 " + need_node + " 审"; }
+    push(out, put(put(put(t, "can_act", mine), "next_node", need_node),
+                  "blocked_reason", why));
+    i = i + 1;
+  }
+  return out;
+}
+
+// 容器内发往执行方用的地址覆盖。留空时由调用方按 loopback 规则改写。
+func container_target(): string {
+  let v = env("PEER_CONTAINER_TARGET");
+  if (v == null) { return ""; }
+  return v;
+}
+
+// 按 target 逐项改写(容器内用)。格式: "127.0.0.1:18102=crm-peer:18102,..."
+//
+// 为什么需要逐项: 一个 PEER_CONTAINER_TARGET 只能覆盖**一个**目标, 而看板
+// 同时探多个节点(blog/crm/scanner)。真实场景是"一部分节点在共享 Docker 网
+// 里按别名访问, 另一部分在宿主"。逐项映射能表达这种混合, 单一值不能。
+//
+// 找不到映射就返回空串, 由调用方回退到 loopback 规则(host.docker.internal)。
+export func map_target(t: string): string {
+  let raw = env("PEER_CONTAINER_TARGETS");
+  if (raw == null) { return ""; }
+  let parts = str_match("[^,]+", raw);
+  let i = 0;
+  while (i < len(parts)) {
+    let one = str(get(get(parts, i, {}), "text", ""));
+    let m = str_match("^([^=]+)=(.+)$", one);
+    if (len(m) > 0) {
+      let g = get(get(m, 0, {}), "groups", []);
+      let from = str(get(g, 0, ""));
+      let to = str(get(g, 1, ""));
+      if (len(from) > 0 and from == t) { return to; }
+    }
+    i = i + 1;
+  }
+  return "";
+}
+
+// 安全地取一个字符串字段。
+//
+// 为什么需要它: lume 的 str(null) 返回**字面量 "null"**(4 个字符), 不是空串。
+// 于是 `len(str(get(m, "k", ""))) > 0` 在字段为 null 时恒为真 —— 这个坑
+// 让 container_target 被当成有效值 "null", 目标地址被改写成一个不存在的主机。
+// 凡是"可能为 null 的字符串"都走这里, 不要直接 str(get(...))。
+export func s_or_empty(v) {
+  if (v == null) { return ""; }
+  let t = str(v);
+  if (t == "null") { return ""; }
+  return t;
+}
+
+// 只把 peers.json 读成 map。审批路径要它, 但**不能**用 peers_payload():
+// 后者会顺带跑 annotate 等一堆只给界面看的东西, 在请求处理器里重复做一遍
+// 既浪费又容易在 workers>1 时踩到共享文件的读写竞争(实测表现为请求超时)。
+export func peers_snapshot() {
+  let txt = read_file(peers_path);
+  if (txt == null) { return null; }
+  let r = try(() => json(txt));
+  if (r.err != null || r.ok == null) { return null; }
+  return r.ok;
+}
+
 export func peers_payload() {
   let txt = read_file(peers_path);
   if (txt == null) {
@@ -261,9 +353,16 @@ export func peers_payload() {
     up_count: int(get(r.ok, "up_count", 0)),
     // 待办审批 + 审计: 采集侧(peers_fetch.py)从 PEER_STATE_DIRS 读取执行方的
     // 任务与审计文件。未配置来源时为空数组, 前端据此显示"无"而不是报错。
-    pending: get(r.ok, "pending", []),
+    // 每条待办补一个 can_act: "这一关是否轮到本节点"。UI 据此决定给不给
+    // 批准/驳回按钮 —— 判定规则只在服务端写一份(approvals.next_role),
+    // 前端不复刻, 否则两边规则一旦漂移就会出现"按钮能点但请求被拒"。
+    pending: annotate(get(r.ok, "pending", [])),
     audit: get(r.ok, "audit", []),
     state_dirs: get(r.ok, "state_dirs", []),
+    // 容器内的出站地址覆盖(空 = 由 approvals 按 loopback 规则自动改写)。
+    // 与 PEER_CONTAINER_TARGETS 同名, 让"宿主怎么探测"和"容器怎么发"两件事
+    // 可以分开配, 而不是把宿主地址硬塞进容器去碰运气。
+    container_target: container_target(),
     total_count: int(get(r.ok, "total_count", 0)),
     peers: ps,
     error: get(r.ok, "error", ""),

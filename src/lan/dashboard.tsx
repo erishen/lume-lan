@@ -20,7 +20,13 @@ import { isActive, LanRow } from "./types";
 import { TrafficChart, PerDeviceChart } from "./charts";
 import { DeviceRow, WanCard, DeviceDetail } from "./device";
 import { DnsPanel } from "./dns";
-import { PeersPanel } from "./peers";
+import { PeersPanel, AgentPanel } from "./peers";
+
+/* 页签白名单。放在模块级而不是组件内: 组件内每次渲染都会新建一份,
+ * useCallback 的依赖检查因此失去意义, 也白白多分配。 */
+type TabKey = "overview" | "devices" | "dns" | "peers" | "agent";
+const TAB_KEYS: TabKey[] = ["overview", "devices", "dns", "peers", "agent"];
+
 
 export function Dashboard(): React.ReactElement {
   const [data, setData] = React.useState<DevicesPayload | null>(null);
@@ -35,7 +41,22 @@ export function Dashboard(): React.ReactElement {
    * 260KB 历史)期间界面看起来毫无反应。 */
   const [refreshing, setRefreshing] = React.useState(false);
   /* Tab 分区: 总览(网络/流量/排行) / 设备(统一设备表+详情) / 域名访问(DNS 记录) */
-  const [tab, setTab] = React.useState<"overview" | "devices" | "dns" | "peers">("overview");
+  /* Tab: 记在 localStorage, 刷新后回到上次所在的页。
+   *
+   * 为什么值得记: 「应用互访」是常用的落地页(看 agent 对话、待办审批),
+   * 每次刷新都被弹回「总览」, 等于要重新点一次。主题也是同样的处理方式
+   * (见 app.tsx), 两处保持一致。
+   *
+   * 存之前要校验: localStorage 里的值可能是旧版本留下的(页签名改过/删过),
+   * 直接塞进 state 会让所有 tab 都不匹配、页面空白。所以只接受白名单里的值。 */
+  const [tab, setTabState] = React.useState<TabKey>(() => {
+    const saved = localStorage.getItem("lume-tab");
+    return (TAB_KEYS as string[]).includes(saved || "") ? (saved as TabKey) : "overview";
+  });
+  const setTab = React.useCallback((k: TabKey) => {
+    setTabState(k);
+    localStorage.setItem("lume-tab", k);
+  }, []);
   /* 单设备流量趋势: 点选某台设备(Top5/终端行)看它近 5h 自己的曲线 */
   const [selIp, setSelIp] = React.useState<string>("");
   const [rtrTraffic, setRtrTraffic] = React.useState<RouterTrafficPayload | null>(null);
@@ -384,6 +405,12 @@ export function Dashboard(): React.ReactElement {
             <button type="button" className={"tab" + (tab === "peers" ? " sel" : "")} onClick={() => setTab("peers")}>
               应用互访{peers && (peers.up_count ?? 0) > 0 ? <span className="badge">{peers.up_count}</span> : null}
             </button>
+            {/* Agent 放在「应用互访」**之后**: 它依赖那一页 —— 先能看到有哪些
+                节点、各有什么工具, 才谈得上让 agent 去调。顺序反过来会让人
+                先面对一个空对话, 不知道它能查什么。 */}
+            <button type="button" className={"tab" + (tab === "agent" ? " sel" : "")} onClick={() => setTab("agent")}>
+              Agent
+            </button>
             <span className="tabs-right">
               <span className="hint">快照于 {fmtTs(data.scanned_at)}</span>
               <button className="btn" disabled={refreshing} onClick={() => void load()}>{refreshing ? "刷新中…" : "刷新"}</button>
@@ -586,9 +613,18 @@ export function Dashboard(): React.ReactElement {
             </div>
           ) : null}
 
+          {/* Agent 对话是独立 Tab: 它和「应用互访」是两件事 ——
+              后者是运维视角(拓扑/探测/调工具), 前者是使用视角(问一句要结果)。
+              混在一起时, 对话面板会把节点卡片、待办审批全推到很下面。 */}
+          {tab === "agent" ? (
+            <div className="tabpanel">
+              <AgentPanel peers={peers} />
+            </div>
+          ) : null}
+
           {tab === "peers" ? (
             <div className="tabpanel">
-              <PeersPanel peers={peers} />
+              <PeersPanel peers={peers} onChanged={() => void load()} />
             </div>
           ) : null}
         </>

@@ -1,7 +1,13 @@
 # 不进镜像(前端已 build 好直接 COPY, 不跑 node)
 node_modules
 .git
+# .runtime 里绝大多数是临时产物, 不进镜像; 唯一例外是 lume-core/lib ——
+# make docker-build 会把它同步进来, 再 COPY 到镜像根(/lume-core/lib),
+# 好让 lan.lume 的 "../lume-core/lib/peer.lume" 能在容器里解析。
 .runtime
+!.runtime/lume-core
+!.runtime/lume-core/lib
+!.runtime/lume-core/lib/**
 .logs
 
 # 本地数据/凭据不进镜像; 用挂载卷提供

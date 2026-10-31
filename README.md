@@ -115,7 +115,7 @@ tail -3 .runtime/refresh.log
 make docker-up        # = docker compose up -d
 
 # 3. Open
-#    http://localhost:10091/   (Basic Auth: admin / the password you set via make auth-pass)
+#    http://localhost:10091/   (no login by default — see "Basic Auth" below)
 ```
 
 Data collection is handled by **launchd at login** (see below); no need to start the
@@ -164,6 +164,22 @@ docker compose up -d
 ```
 
 - Multi-arch: `make docker-build-multiarch` (vendor/ must contain both arches).
+
+**When upstream release lags behind local fixes:** use `make vendor-src` to compile the
+static Linux binary from the local `../lume` tree instead of downloading the GitHub
+release. `docker-build` detects `vendor/.lume-build` and skips `docker-fetch` so your
+build isn't silently replaced by the older release binary.
+
+```bash
+make vendor-src     # compile from ../lume source → vendor/ (+ .lume-build provenance)
+make docker-build   # auto-detects .lume-build, skips download
+```
+
+`.lume-build` records the source commit, build time and uncommitted-change count — it is
+the only provenance available for a locally built binary, since upstream digests don't
+apply. Real incident: the prefork TLS-warmup fix (`lume_http_warmup`) existed only in
+source; images built from the v0.11.0 release silently lacked it, so every first-time
+HTTPS egress from a worker crashed on macOS.
 - The static build is fully static but still bases on `python:3.12-slim` (the optional
   in-container refresh loop needs python3), not `scratch`.
 - Networking: Mac's Docker Desktop default NAT usually reaches `192.168.1.1` (example
@@ -175,14 +191,26 @@ docker compose up -d
 The dashboard enables **Basic Auth by default** (it does expose your home
 IP/MAC/traffic):
 
+**Basic Auth is OFF by default.** The container publishes only to `127.0.0.1`, so
+nothing outside this machine can reach it — the marginal protection is small while
+the cost is real: Basic's credential cache is unreliable, so every refresh (or a new
+tab) asks for the password again.
+
+Turn it on when you bind the port beyond loopback (e.g. `DOCKER_BIND=0.0.0.0`):
+
 ```bash
-make auth-pass        # interactive: set the admin password → writes .runtime/htpasswd (bcrypt cost 12)
-make docker-redeploy  # redeploy to apply (htpasswd mounted ro into the container)
+make auth-pass                                  # set admin password → .runtime/htpasswd
+KANBAN_AUTH=1 make docker-up                    # or put KANBAN_AUTH=1 in .env
 ```
 
 - The credential file `.runtime/htpasswd` (0600, gitignored) is mounted `:ro` to
-  `/auth/htpasswd`; the in-container Lume enables auth via `HTPASSWD_FILE` —
-  **the password never enters the image or git**.
+  `/auth/htpasswd`; the in-container entrypoint exports `HTPASSWD_FILE` only when
+  `KANBAN_AUTH` is non-empty — **the password never enters the image or git**.
+- Why the switch lives in the entrypoint, not in compose: compose cannot *omit* an
+  environment variable. `${VAR:+…}` still leaves the key present with an empty value,
+  and Lume treats "variable exists" as "auth enabled" → it tries to `open("")`, the
+  log fills with `cannot open htpasswd file: `, and the restart policy loops. Unsetting
+  it in the entrypoint is the only way to make the variable truly absent.
 - Change password: re-run `make auth-pass` + `make docker-redeploy`.
 
 ## AdGuard Home (domain-access data source)
@@ -240,9 +268,12 @@ make dev              # stop + check + scan + router-fetch + esbuild watch + Lum
 - `make ui`            one-shot frontend build (esbuild → www/app.js, not watch)
 - `make check`         Lume --check lan.lume (DSL syntax)
 - `make test`          unit tests (stdlib unittest: ping args, host-IP fallback, traffic-history identity/migration)
-- `make privacy`       privacy check: tracked files must not contain real LAN identifiers
-                      (private subnets / public IPs / MACs outside the example allow-list;
-                      add `LOCAL=1` to also diff against this host's `.data/` snapshot)
+- `make privacy`       privacy check: tracked **and untracked** files must not contain real
+                      LAN identifiers (private subnets / public IPs / MACs outside the
+                      example allow-list). Untracked coverage matters most — a newly
+                      written file is where a copied field note lands, and the old
+                      tracked-only scan never saw it. Add `LOCAL=1` to also diff against
+                      this host's `.data/` snapshot; `TRACKED=1` restores tracked-only.
 - `make hooks`         install a pre-commit hook that runs `privacy --staged`
 - `make stop`          stop the 8091 service + leftover esbuild watch + background refresh loop
 - After frontend changes → `make ui` → `make docker-redeploy` to ship into the container.
@@ -275,6 +306,11 @@ make dev              # stop + check + scan + router-fetch + esbuild watch + Lum
   (`192.168.1.x`, `aa:bb:cc:dd:ee:ff`). Run `make privacy` before pushing, or install
   the guard with `make hooks` so `git commit` refuses leaked identifiers in the
   staged diff.
+
+  `make privacy` scans **tracked and untracked** files (untracked ones that
+  `.gitignore` covers are skipped — those never reach the repository, so reporting
+  them would only bury the real hits). The pre-commit hook still uses `--staged`,
+  which is the right scope for a commit: it only judges what is about to go in.
 
 ## License
 

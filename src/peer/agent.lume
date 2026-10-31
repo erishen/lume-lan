@@ -67,8 +67,14 @@ export func parse_sse(raw: string) {
 // ── 通道 1: agent 对话 ──────────────────────────────────────────────
 // session_id 非空时透传(agent-httpd 按 sessionId 存 transcript/facts)
 export func ask(question: string, session_id: string) {
+  // 两个分支各自 return 而不是"先赋一个再改": lume 的 {..} 字面量会推断出
+  // **固定 shape**(只有出现过的键), 后赋一个多/少键的 map 就是类型不匹配。
+  // 这个错只在 len(session_id) > 0 那条分支被类型检查时才暴露, 所以
+  // --check 一跑就报, 但运行时若从没传过 sessionId 反而不会炸。
   let payload = { message: question };
-  if (len(session_id) > 0) { payload = { message: question, sessionId: session_id }; }
+  if (len(session_id) > 0) {
+    payload = put(payload, "sessionId", session_id);
+  }
   let body = stringify(payload);
   let r = http_post(agent_url + "/react/api/chat",
     { timeout: int(agent_timeout), max_bytes: agent_max_bytes, allow_private: true,

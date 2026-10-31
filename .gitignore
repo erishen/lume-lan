@@ -19,8 +19,66 @@ node_modules/
 # 保留 .gitkeep 让目录进仓（Dockerfile 的 COPY vendor/ 需要目录存在）。
 vendor/*
 !vendor/.gitkeep
+# .lume-build 记的是"vendor 里这份二进制从哪来"(源码 commit / 构建时间)。
+# 用 make vendor-src 从工作区源码编译时, 上游 digest 校验不适用, 这份元数据
+# 就是唯一的追溯依据 —— 所以它必须入库, tarball/sha 仍然不入。
+!vendor/.lume-build
 
 # ---- 有意跟踪 ----
 # .env.example（无密码模板）与 www/app.js（esbuild 产物,Lume 直接 serve,免宿主 build）
 # 二者都要进仓,若被上面某条误伤请用 ! 显式放行:
 !.env.example
+
+# 容器侧审计(看板自己发起的那一跳); 运行时产物不入库。
+# 目录本身要进仓 —— compose 把 ./audit 挂进容器, 目录不存在时 Docker 会
+# 建一个 root 属主的空目录, 宿主侧采集可能读不到。
+/audit/*.jsonl
+/audit/*.jsonl.1
+!/audit/.gitkeep
+
+# ---- 调试脚本(临时) ----
+# 排查时写的一次性 .lume 脚本: 复现 fork 崩溃、验端口、查 body 之类。
+# 它们不是交付物, 但**曾经离被误提交只有一步** —— `git add -A` 会把 57 个
+# 全带上。用模式挡住, 比每次手动挑安全。
+*_tmp.lume
+*_tmp.py
+# 其它形态的临时文件(如验证脚本自己造的 probe_*_tmp.txt)。
+# 只列扩展名会漏掉 .txt/.json 这些, 于是临时文件照样能进 git status。
+*_tmp.txt
+*_tmp.json
+*_tmp.sh
+probe90_tmp.py
+fork_*.lume
+diag*.lume
+http_tmp*.lume
+apptest*.lume
+bodychk*.lume
+chat_tmp.lume
+cmp*_tmp.lume
+cmp_tmp.lume
+crash_tmp.lume
+deg_tmp.lume
+full_fix.lume
+post_tmp*.lume
+warmchk.lume
+envchk*.lume
+verify_tmp.lume
+fix_tmp.lume
+fix2_tmp.lume
+qtest_tmp.lume
+tgtchk_tmp.lume
+ui_tmp.lume
+dbchk*.lume
+lan_tmp*.lume
+lan_test_tmp.lume
+tsc_check_tmp.json
+
+# ---- 运行时同步进来的技能 ----
+# peer-up 时 agent-httpd 的 router 同步会把技能写进 skills/router/。
+# 那是运行时产物, 不是本仓库的源码 —— 与 lume-scanner 里同款目录的处理一致。
+/skills/router/
+
+# ---- 已废弃的脚本 ----
+# peer_apps_up.sh 让"看板去起别的应用的节点", 那是错的(版本/配置会漂移)。
+# 已由各应用自己的 make peer-up 取代, 脚本保留仅作说明且执行即 exit 1。
+/scripts/peer_apps_up.sh

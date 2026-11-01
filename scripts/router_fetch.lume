@@ -1,0 +1,646 @@
+// router_fetch.lume — 从家用路由器(HiLink CAT)抓身份 + 终端列表, 写 .data/router.json
+//
+// ══ 为什么从 Python 迁到 lume ═════════════════════════════════════════════
+// 原来这里是 router_fetch.py(884 行) + daily_digest.py + webhook_notify.py
+// 三个脚本。它们的唯一存在理由, 是容器里的刷新循环:
+//     REFRESH=1 时 entrypoint.sh 每隔 N 秒跑一次 router_fetch.py
+// 而为这一个用途, 镜像里要装 python3 —— 实测 44MB, 占整个镜像 76MB 的 58%。
+//
+// 迁过来的前提是 lume 能维持**会话**: 这套路由器后台的流程是
+//     GET  /html/index.html          → 响应头 Set-Cookie 给出会话, 页面里带 csrf
+//     POST /api/system/user_login    → 带上那个 cookie 才算登录成功
+//     GET  /api/system/HostInfo      → 带 cookie 才返回终端列表
+// 也就是说必须能**读到响应头**。原来 lume 的 http_* 只返回 body, 做不到,
+// 所以这部分只能留在 Python。现在 http_* 的返回值带了 `headers`
+// (见 lang/builtins_http.c 的 headers 段), 这条路才通。
+//
+// ══ 优雅降级(与 Python 版一致) ═══════════════════════════════════════════
+// 未填密码 / 登录失败 → router_devices 为空 + login.ok=false,
+// 但 deviceinfo 身份层(无需登录)仍正常输出。前端只显示路由器身份 +
+// 登录失败提示, 不影响 arp 快照。
+//
+// 用法: lume scripts/router_fetch.lume [RouTerHost]
+//       不传则从 .data/devices.json 的 gateway 推导
+
+// ── 配置 ──────────────────────────────────────────────────────────────
+let out_path = ".data/router.json";
+let fail_ts_path = ".runtime/router_login_fail_ts";
+// 登录失败冷却(秒)。
+// 路由器连续失败会锁 IP 一段时间(Too_Many_user, 默认 3 次), 而这个脚本
+// 是每 60s 跑一次的循环 —— 不自己退避的话, 一次密码错误就会把锁越打越紧,
+// 而且每轮都白跑一次。5 分钟与 Python 版一致。
+let cooldown_secs = 300;
+
+func read_fail_ts(): int {
+  let t = read_file(fail_ts_path);
+  if (t == null) { return 0; }
+  let v = trim(str(t));
+  if (len(v) == 0) { return 0; }
+  return int(v);
+}
+
+func write_fail_ts(ts: int) {
+  mkdir(".runtime");
+  write_file(fail_ts_path, str(ts));
+}
+
+func env_or(k: string, dflt: string): string {
+  let v = env(k);
+  if (v == null or len(str(v)) == 0) { return dflt; }
+  return str(v);
+}
+
+// ── 会话 ──────────────────────────────────────────────────────────────
+// cookie 存在一个 map 里(同名覆盖, 保留最新登录态)。lume 没有对象状态,
+// 所以由调用方显式传递 —— 三个函数都用 sess 这个 map。
+export func new_sess(base: string) {
+  return { base: base, cookies: {}, last_status: 0, last_err: "" };
+}
+
+func index_of(s: string, needle: string): int {
+  let n = len(needle);
+  let i = 0;
+  while (i + n <= len(s)) {
+    if (substr(s, i, n) == needle) { return i; }
+    i = i + 1;
+  }
+  return -1;
+}
+
+// 把 Set-Cookie 串解析进 sess.cookies。
+// 一个响应可能带多条(用 ", " 连接, 见 builtins_http.c), 逐条取 "k=v" 部分。
+export func absorb_cookies(sess, set_cookie: string) {
+  let parts = split(set_cookie, ",");
+  let i = 0;
+  while (i < len(parts)) {
+    let one = trim(str(get(parts, i, "")));
+    if (len(one) > 0) {
+      let semi = index_of(one, ";");
+      let kv = one;
+      if (semi >= 0) { kv = substr(one, 0, semi); }
+      let eq = index_of(kv, "=");
+      if (eq > 0) {
+        let k = trim(substr(kv, 0, eq));
+        let v = trim(substr(kv, eq + 1, len(kv) - eq - 1));
+        if (len(k) > 0) { put(sess.cookies, k, v); }
+      }
+    }
+    i = i + 1;
+  }
+}
+
+
+// cookie 拼成请求头值 "k1=v1; k2=v2"
+export func cookie_header(sess) {
+  let ks = keys(sess.cookies);
+  let out = "";
+  let i = 0;
+  while (i < len(ks)) {
+    let k = str(get(ks, i, ""));
+    if (len(k) > 0) {
+      if (len(out) > 0) { out = out + "; "; }
+      out = out + k + "=" + str(get(sess.cookies, k, ""));
+    }
+    i = i + 1;
+  }
+  return out;
+}
+
+// 一次请求。method 为 GET 时 body 传 ""。
+// 这套后台要求带 _ResponseFormat:JSON, 否则未登录态 /api/* 会被 404 隐藏 ——
+// 那不是"路径写错", 而是它故意不告诉你接口存在。
+export func req(sess, method: string, path: string, body: string, timeout: int) {
+  let url = str(get(sess, "base", "")) + path;
+  let hdrs = {
+    "_ResponseFormat": "JSON",
+    "X-Requested-With": "XMLHttpRequest",
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124.0 Safari/537.36"
+  };
+  if (len(body) > 0) {
+    put(hdrs, "Content-Type", "application/json; charset=utf-8");
+  }
+  let ck = cookie_header(sess);
+  if (len(ck) > 0) { put(hdrs, "Cookie", ck); }
+
+  let r = {};
+  if (method == "GET") {
+    r = http_get(url, { timeout: timeout, max_bytes: 4194304,
+                        allow_private: true, headers: hdrs });
+  } else {
+    r = http_post(url, { timeout: timeout, max_bytes: 4194304,
+                         allow_private: true, headers: hdrs, body: body });
+  }
+
+  let status = int(get(r, "status", 0));
+  let hs = get(r, "headers", null);
+  if (hs != null) {
+    let sc = str(get(hs, "set-cookie", ""));
+    if (len(sc) > 0) { absorb_cookies(sess, sc); }
+  }
+  put(sess, "last_status", status);
+  if (get(r, "ok", false) != true) {
+    put(sess, "last_err", str(get(r, "err", "")));
+    return { status: 0, text: "" };
+  }
+  put(sess, "last_err", "");
+  return { status: status, text: str(get(r, "body", "")) };
+}
+
+export func get_json(sess, path: string) {
+  let r = req(sess, "GET", path, "", 15);
+  let j = null;
+  if (len(str(get(r, "text", ""))) > 0) {
+    let p = try(() => json(str(get(r, "text", ""))));
+    if (p.err == null) { j = p.ok; }
+  }
+  return { code: int(get(r, "status", 0)), json: j };
+}
+
+export func post_json(sess, path: string, payload) {
+  let r = req(sess, "POST", path, stringify(payload), 15);
+  let j = null;
+  if (len(str(get(r, "text", ""))) > 0) {
+    let p = try(() => json(str(get(r, "text", ""))));
+    if (p.err == null) { j = p.ok; }
+  }
+  return { code: int(get(r, "status", 0)), json: j };
+}
+
+// ── CSRF 与登录 ───────────────────────────────────────────────────────
+// 路由器每次刷新 csrf 值, 所以必须先从首页拿一遍再登录。
+export func csrf(sess) {
+  let r = req(sess, "GET", "/html/index.html", "", 15);
+  let raw = str(get(r, "text", ""));
+  let cp = "";
+  let ct = "";
+  let hits = str_match("name=\"(csrf_param|csrf_token)\"[^>]*content=\"([^\"]*)\"", raw);
+  let i = 0;
+  while (i < len(hits)) {
+    let h = get(hits, i, {});
+    let text = str(get(h, "text", ""));
+    let groups = get(h, "groups", null);
+    let nm = "";
+    let val = "";
+    if (groups != null and len(groups) >= 2) {
+      nm = str(get(groups, 0, ""));
+      val = str(get(groups, 1, ""));
+    }
+    if (nm == "csrf_param") { cp = val; }
+    if (nm == "csrf_token") { ct = val; }
+    // 兜底: 若 groups 不可用, 从 text 里手工截
+    if (len(nm) == 0 and len(text) > 0) {
+      if (index_of(text, "csrf_param") >= 0) { nm = "csrf_param"; }
+      if (index_of(text, "csrf_token") >= 0) { nm = "csrf_token"; }
+      let ci = index_of(text, "content=\"");
+      if (ci >= 0) {
+        let rest = substr(text, ci + 9, len(text) - ci - 9);
+        let q = index_of(rest, "\"");
+        if (q >= 0) { val = substr(rest, 0, q); }
+      }
+      if (nm == "csrf_param") { cp = val; }
+      if (nm == "csrf_token") { ct = val; }
+    }
+    i = i + 1;
+  }
+  return { code: int(get(r, "status", 0)), csrf_param: cp, csrf_token: ct };
+}
+
+// 简单 SHA256 登录。Password = SHA256(user + b64(SHA256(pw)) + csrf_param + csrf_token)
+// 这是与网页前端等价的做法; 用它与网页的 SCRAM 计数分开, 不会被其限流锁拖累。
+export func login(sess, user: string, pw: string) {
+  let c = csrf(sess);
+  if (int(get(c, "code", 0)) != 200 or len(str(get(c, "csrf_param", ""))) == 0) {
+    return { ok: false, level: 0,
+             error: "取不到 csrf(html/index.html http=" + str(get(c, "code", 0)) + ")" };
+  }
+  let cp = str(get(c, "csrf_param", ""));
+  let ct = str(get(c, "csrf_token", ""));
+  let inner = sha256(pw);
+  let b64 = base64_encode(inner);
+  let pwd = sha256(user + b64 + cp + ct);
+  let r = post_json(sess, "/api/system/user_login", {
+    "data": { "UserName": user, "Password": pwd, "LoginFlag": 1 },
+    "csrf": { "csrf_param": cp, "csrf_token": ct }
+  });
+  let j = get(r, "json", null);
+  if (j != null and str(get(j, "errorCategory", "")) == "ok") {
+    return { ok: true, level: int(get(j, "level", 0)), error: "" };
+  }
+  let code = int(get(r, "code", 0));
+  let detail = "";
+  if (j != null) { detail = substr(stringify(j), 0, 160); }
+  return { ok: false, level: 0, error: "http=" + str(code) + " " + detail };
+}
+
+// 免密身份层: GET /api/system/deviceinfo(未登录也开放)
+export func deviceinfo(sess) {
+  let r = get_json(sess, "/api/system/deviceinfo");
+  let j = get(r, "json", null);
+  if (j == null) {
+    return { ok: false, status: int(get(r, "code", 0)), info: null };
+  }
+  let has_serial = get(j, "SerialNumber", null) != null;
+  return { ok: has_serial, status: int(get(r, "code", 0)), info: j };
+}
+
+// ══ 数据归一化 ═══════════════════════════════════════════════════════════
+
+// KB 字段转字节。路由器给的是 KB, 前端要字节。
+func kbytes(d, key: string): int {
+  let v = get(d, key, null);
+  if (v == null) { return 0; }
+  let f = float(v);
+  if (f <= 0.0) { return 0; }
+  return int(f * 1024.0);
+}
+
+// HostInfo(顶层 list)→ 归一化终端列表。
+// 在线优先, 其次按下载量降序 —— 前端首屏最需要"谁在用网"。
+export func extract_hostinfo(payload) {
+  let out = [];
+  if (payload == null) { return out; }
+  let i = 0;
+  while (i < len(payload)) {
+    let d = get(payload, i, null);
+    i = i + 1;
+    if (d == null) { continue; }
+    let mac = lower(str(get(d, "MACAddress", "")));
+    // 显示名优先级: 用户手写备注(ActualName, 最权威) > 设备自报主机名 > 空。
+    // "未知设备-XXXX" 是路由器的占位名, 当没有。
+    let host = trim(str(get(d, "ActualName", "")));
+    if (len(host) == 0) {
+      let hn = trim(str(get(d, "HostName", "")));
+      if (len(str_match("^未知设备-[0-9A-Fa-f]{4}$", hn)) == 0) { host = hn; }
+    }
+    // 厂商只信路由器 DevBrands(权威); 识别不出就留空, 不臆造。
+    let vendor = trim(str(get(d, "DevBrands", "")));
+    let last = "";
+    let rec = str(get(d, "AccessRecord", ""));
+    if (len(rec) > 0) {
+      let hi = index_of(rec, "#");
+      if (hi > 0) { last = substr(rec, 0, hi); }
+    }
+    // wired: 有线/无线。WlanActive 缺失表示"不知道", 给 null;
+    // 但 lume 不允许变量类型混用(null 与 bool), 所以用一个显式旗标分开。
+    let wlan = get(d, "WlanActive", null);
+    let wired_known = wlan != null;
+    let wired = false;
+    if (wired_known) { wired = !(get(d, "WlanActive", false) == true); }
+
+    // wired 的三态(有线/无线/未知)没法用三元表达 —— lume 要求两支同类型。
+    // 先建 map 再按需 put, 未知时干脆不放这个键。
+    let entry = {
+      "ip": str(get(d, "IPAddress", "")),
+      "mac": mac,
+      "hostname": host,
+      "vendor": vendor,
+      "rx_bytes": kbytes(d, "RxKBytes"),
+      "tx_bytes": kbytes(d, "TxKBytes"),
+      "up_rate": int(get(d, "UpRate", 0)),
+      "down_rate": int(get(d, "DownRate", 0)),
+      "online": get(d, "Active", false) == true,
+      "guest": get(d, "IsGuest", false) == true,
+      "last_seen": last,
+      "icon": lower(trim(str(get(d, "IconType", "")))),
+      "freq": trim(str(get(d, "Frequency", "")))
+    };
+    if (wired_known) { put(entry, "wired", wired); }
+    push(out, entry);
+  }
+  return sort_devices(out);
+}
+
+// 在线优先, 其次按下载量降序。
+//
+// 用"选最小值追加"而不是原地冒泡: lume 的 put() 只适用于 map(改字段),
+// 不能按下标替换 list 元素 —— 原地排序会报 "put() key must be a map",
+// 而那句报错完全指不到"你在给 list 赋值"。
+// 终端数通常 < 50, 重建一个 list 的代价可以忽略。
+func sort_devices(list) {
+  let rest = [];
+  let i = 0;
+  while (i < len(list)) { push(rest, get(list, i, {})); i = i + 1; }
+  let out = [];
+  while (len(rest) > 0) {
+    // 找当前最优: 先比 online, 再比 rx_bytes
+    let best = 0;
+    let k = 1;
+    while (k < len(rest)) {
+      let a = get(rest, k, {});
+      let b = get(rest, best, {});
+      let a_on = get(a, "online", false) == true;
+      let b_on = get(b, "online", false) == true;
+      let better = false;
+      if (a_on and !b_on) { better = true; }
+      else if (a_on == b_on) {
+        if (int(get(a, "rx_bytes", 0)) > int(get(b, "rx_bytes", 0))) { better = true; }
+      }
+      if (better) { best = k; }
+      k = k + 1;
+    }
+    push(out, get(rest, best, {}));
+    // 从 rest 里摘掉 best 位置
+    let nr = [];
+    let m = 0;
+    while (m < len(rest)) {
+      if (m != best) { push(nr, get(rest, m, {})); }
+      m = m + 1;
+    }
+    rest = nr;
+  }
+  return out;
+}
+
+// device/topology → {mac: {rssi, link_quality, access_type, active}}
+// HostInfo 里 RSSI 恒为 0, 真实信号强度在这个端点。
+// 路由器自身那条(routerSelf=1)没有 MAC, 跳过。
+export func extract_topology(payload) {
+  let m = {};
+  if (payload == null) { return m; }
+  let i = 0;
+  while (i < len(payload)) {
+    let d = get(payload, i, null);
+    i = i + 1;
+    if (d == null) { continue; }
+    if (int(get(d, "routerSelf", 0)) == 1) { continue; }
+    let mac = lower(str(get(d, "MACAddress", "")));
+    if (len(mac) > 0) {
+      put(m, mac, {
+        "rssi": int(get(d, "RSSI", 0)),
+        "link_quality": trim(str(get(d, "LinkQuality", ""))),
+        "access_type": trim(str(get(d, "AccessType", ""))),
+        "active": get(d, "Active", false) == true
+      });
+    }
+  }
+  return m;
+}
+
+// 把 topology 的信号强度并进终端列表(按 mac 关联)。
+// HostInfo 的 RSSI 恒为 0, 真实值在这个端点; 关联不上的设备不编造信号。
+export func merge_topology(devices, topo) {
+  let i = 0;
+  while (i < len(devices)) {
+    let d = get(devices, i, {});
+    let mac = str(get(d, "mac", ""));
+    let t = get(topo, mac, null);
+    if (t != null) {
+      put(d, "rssi", int(get(t, "rssi", 0)));
+      put(d, "link_quality", str(get(t, "link_quality", "")));
+      put(d, "access_type", str(get(t, "access_type", "")));
+    }
+    i = i + 1;
+  }
+  return devices;
+}
+
+// ── 主流程 ────────────────────────────────────────────────────────────
+// 返回写入的 map(也写到 .data/router.json), 便于脚本模式直接 print 验证。
+export func run(host_in: string, user: string, pw: string) {
+  let host = host_in;
+  if (len(host) == 0) { return { ok: false, error: "拿不到路由器地址" }; }
+  if (substr(host, 0, 4) != "http") { host = "http://" + host; }
+  let fetched_at = int(now());
+
+  let sess = new_sess(host);
+  let probe = [];
+
+  // 1) 免密身份层。它成功不代表能拿终端列表 —— 两个权限级别。
+  let di = deviceinfo(sess);
+  push(probe, { endpoint: "api/system/deviceinfo", method: "GET", auth: "none",
+                status: int(get(di, "status", 0)), ok: get(di, "ok", false) == true });
+  let router = { host: host, fetched_at: fetched_at, ok: false, note: "" };
+  let diinfo = get(di, "info", null);
+  if (diinfo != null) {
+    let cust = get(diinfo, "custinfo", null);
+    let model = str(get(diinfo, "DeviceName", ""));
+    if (cust != null) {
+      let m2 = str(get(cust, "CustDeviceName", ""));
+      if (len(m2) > 0) { model = m2; }
+    }
+    put(router, "ok", true);
+    put(router, "model", model);
+    put(router, "serial", str(get(diinfo, "SerialNumber", "")));
+    put(router, "router_type", str(get(diinfo, "RouterType", "")));
+    put(router, "manufacturer_oui", str(get(diinfo, "ManufacturerOUI", "")));
+    if (cust != null) {
+      let f1 = str(get(cust, "CustZHFriendlyName", ""));
+      let f2 = str(get(cust, "CustENFriendlyName", ""));
+      put(router, "friendly", len(f1) > 0 ? f1 : f2);
+    }
+  }
+
+  // 2) 登录 + 终端列表
+  let devices = [];
+  let source = "";
+  let login_res = { ok: false, level: 0, error: "" };
+  let topo = {};
+  let wan = {};
+
+  let since_fail = fetched_at - read_fail_ts();
+  if (len(pw) == 0) {
+    put(login_res, "error", "未配置 ROUTER_PASS(身份层仍可用)");
+    push(probe, { endpoint: "api/system/user_login", method: "SKIP",
+                  auth: "password", status: 0, ok: false });
+  } else if (since_fail < cooldown_secs) {
+    // 冷却中: 不碰登录端点。这既是保护路由器(别把锁越打越紧),
+    // 也是省掉一次必然失败的请求。
+    put(login_res, "error", "冷却中(约 " + str((cooldown_secs - since_fail) / 60) + " 分钟)");
+    put(login_res, "stale", true);
+    push(probe, { endpoint: "api/system/user_login", method: "SKIP",
+                  auth: "password", status: 0, ok: false });
+    // 沿用上次的终端数据, 否则界面会突然空掉 —— 用户会以为是设备全掉线了
+    let prev = read_file(out_path);
+    if (prev != null) {
+      let pv = try(() => json(str(prev)));
+      if (pv.err == null and pv.ok != null) {
+        let old = get(pv.ok, "router_devices", null);
+        if (old != null and len(old) > 0) {
+          devices = old;
+          source = str(get(pv.ok, "terminal_source", ""));
+          put(login_res, "stale_note", "冷却中, 沿用上次的终端数据");
+        }
+      }
+    }
+  } else {
+    let lg = login(sess, user, pw);
+    login_res = lg;
+    push(probe, { endpoint: "api/system/user_login", method: "POST",
+                  auth: "sha256_simple", status: 200,
+                  ok: get(lg, "ok", false) == true });
+    // 成败都记: 成功清掉冷却标记, 失败留下时间戳让下一轮退避。
+    if (get(lg, "ok", false) == true) {
+      write_fail_ts(0);
+    } else {
+      write_fail_ts(fetched_at);
+      // 登录失败不清空: 沿用上次成功的终端列表(见 reuse_last 注释)
+      let prev = read_file(out_path);
+      if (prev != null) {
+        let pv = try(() => json(str(prev)));
+        if (pv.err == null and pv.ok != null) {
+          let keep = reuse_last(pv.ok);
+          if (len(get(keep, "devices", [])) > 0) {
+            devices = get(keep, "devices", []);
+            source = str(get(keep, "source", ""));
+            put(login_res, "stale", true);
+            put(login_res, "stale_note", "登录失败, 沿用上次的终端数据");
+          }
+        }
+      }
+    }
+    if (get(lg, "ok", false) == true) {
+      let hi = get_json(sess, "/api/system/HostInfo");
+      let payload = get(hi, "json", null);
+      devices = extract_hostinfo(payload);
+      source = "api/system/HostInfo";
+      push(probe, { endpoint: "api/system/HostInfo", method: "GET", auth: "session",
+                    status: int(get(hi, "code", 0)), ok: len(devices) > 0 });
+      // 信号强度(可选): 失败不影响主链路
+      let tp = get_json(sess, "/api/device/topology");
+      let tpayload = get(tp, "json", null);
+      if (tpayload != null) {
+        topo = extract_topology(tpayload);
+        devices = merge_topology(devices, topo);
+      }
+      push(probe, { endpoint: "api/device/topology", method: "GET",
+                    auth: "session", status: int(get(tp, "code", 0)),
+                    ok: len(topo) > 0 });
+      // WAN 状态(可选): 单独一个端点, 失败不影响终端列表
+      let wn = get_json(sess, "/api/ntwk/wan");
+      let wpayload = get(wn, "json", null);
+      if (wpayload != null) { wan = extract_wan(wpayload); }
+      push(probe, { endpoint: "api/ntwk/wan", method: "GET", auth: "session",
+                    status: int(get(wn, "code", 0)), ok: len(keys(wan)) > 0 });
+    }
+  }
+
+  let out = {
+    "router": router,
+    "login": login_res,
+    "terminal_source": source,
+    "router_devices": devices,
+    "router_wan": wan,
+    "router_topology": topo,
+    "probe": probe,
+    "fetched_at": fetched_at
+  };
+  // 写盘: 原子写(内建 write_file 先写 .tmp 再 rename, 崩溃不留半截)
+  mkdir(".data");
+  write_file(out_path, stringify(out));
+  return out;
+}
+
+// ── 入口 ──────────────────────────────────────────────────────────────
+// 命令行: lume scripts/router_fetch.lume [host]
+// 无参时从 .data/devices.json 的 gateway 推导, 不写死网段。
+export func main() {
+  let a = argv();
+  let host = "";
+  if (len(a) > 0) { host = str(get(a, 0, "")); }
+  if (len(host) == 0) {
+    let envh = env("ROUTER_HOST");
+    if (envh != null) { host = str(envh); }
+  }
+  if (len(host) == 0) {
+    let txt = read_file(".data/devices.json");
+    if (txt != null) {
+      let p = try(() => json(str(txt)));
+      if (p.err == null and p.ok != null) {
+        host = str(get(p.ok, "gateway", ""));
+      }
+    }
+  }
+  if (len(host) == 0) {
+    print("✗ 拿不到路由器地址: 请在 .env 填 ROUTER_HOST, 或先跑 make scan 生成 .data/devices.json");
+    return 2;
+  }
+  let user = env_or("ROUTER_USER", "admin");
+  let pw = env_or("ROUTER_PASS", "");
+  let r = run(host, user, pw);
+  let lg = get(r, "login", {});
+  print("[router] " + host + " ok=" + str(get(get(r, "router", {}), "ok", false)));
+  print("[login] ok=" + str(get(lg, "ok", false)) + " " + str(get(lg, "error", "")));
+  print("[devices] " + str(len(get(r, "router_devices", []))));
+  print("[written] " + out_path);
+  return 0;
+}
+
+// 登录失败/冷却时沿用上次成功的终端数据。
+//
+// 为什么必须做: 一次登录失败不该让界面上的设备列表清空 —— 那看起来像
+// "所有设备同时掉线", 而实际只是这一轮没登进去。人的第一反应会去查网络,
+// 查半天才发现是登录问题。Python 版正因为这个原因保留了这段逻辑。
+export func reuse_last(out_map) {
+  let out = out_map;
+  if (out == null) { return { devices: [], source: "" }; }
+  let old = get(out, "router_devices", null);
+  if (old == null or len(old) == 0) { return { devices: [], source: "" }; }
+  return { devices: old, source: str(get(out, "terminal_source", "")) };
+}
+
+// ── WAN 状态卡 ────────────────────────────────────────────────────────
+// ntwk/wan 是顶层 list(可能有多条连接), 取默认/启用的那条。
+// 带宽两项各有两个口径: *BandwidthMax 是路由器累计的历史峰值(权威);
+// History 是滚动采样窗口, 峰值取 max、当前速率取最后一个点。
+export func extract_wan(payload) {
+  if (payload == null or len(payload) == 0) { return {}; }
+  let w = null;
+  let i = 0;
+  while (i < len(payload)) {
+    let d = get(payload, i, null);
+    i = i + 1;
+    if (d == null) { continue; }
+    if (get(d, "Enable", false) == true or get(d, "IsDefault", false) == true) {
+      w = d;
+      i = len(payload);
+    }
+  }
+  if (w == null) { return {}; }
+  return {
+    "status": trim(str(get(w, "AccessStatus", ""))),
+    "connection": trim(str(get(w, "ConnectionStatus", ""))),
+    "access_type": trim(str(get(w, "AccessType", ""))),
+    "ipv4_addr": trim(str(get(w, "IPv4Addr", ""))),
+    "ipv4_gateway": trim(str(get(w, "IPv4Gateway", ""))),
+    "dns": trim(str(get(w, "IPv4DnsServers", ""))),
+    "ipv6_addr": trim(str(get(w, "IPv6Addr", ""))),
+    "nat_type": int(get(w, "NATType", 0)),
+    "mtu": int(get(w, "MTU", 0)),
+    "up_max_kbps": kbps_max(w, "UpBandwidthMax"),
+    "down_max_kbps": kbps_max(w, "DownBandwidthMax"),
+    "up_now_kbps": kbps_last(w, "UpBandwidthHistory"),
+    "down_now_kbps": kbps_last(w, "DownBandwidthHistory")
+  };
+}
+
+func kbps_max(w, key: string): int {
+  let v = int(get(w, key, 0));
+  if (v > 0) { return v; }
+  return kbps_peak(w, substr(key, 0, len(key) - 3) + "History");
+}
+
+func kbps_peak(w, key: string): int {
+  let hist = split(str(get(w, key, "")), ",");
+  let best = 0;
+  let i = 0;
+  while (i < len(hist)) {
+    let t = trim(str(get(hist, i, "")));
+    if (len(t) > 0) {
+      let v = int(t);
+      if (v > best) { best = v; }
+    }
+    i = i + 1;
+  }
+  return best;
+}
+
+func kbps_last(w, key: string): int {
+  let hist = split(str(get(w, key, "")), ",");
+  let i = len(hist) - 1;
+  while (i >= 0) {
+    let t = trim(str(get(hist, i, "")));
+    if (len(t) > 0) { return int(t); }
+    i = i - 1;
+  }
+  return 0;
+}

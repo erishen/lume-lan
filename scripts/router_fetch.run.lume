@@ -1,0 +1,11 @@
+// router_fetch.run.lume — 刷新循环的入口
+//
+// 为什么入口单独一个文件: lume 的 import 会执行被导入模块的顶层语句, 没有
+// `if __name__ == "__main__"` 那种守卫。若直接在 router_fetch.lume 末尾调
+// main(), 任何 import 它的地方(比如测试)都会顺手打一次路由器 ——
+// 副作用出现在意料之外的时刻, 而症状是"我只是读了下配置, 路由器被登录了"。
+//
+// 用法: lume scripts/router_fetch.run.lume [host]
+import "router_fetch.lume" as rf;
+
+rf.main();

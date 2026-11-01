@@ -37,10 +37,20 @@ echo "serving ${LUME_VER} on 0.0.0.0:8091 (docroot=/app/www, data=/app/.data)"
 # 容器内自刷新: 打 ROUTER_HOST 更新 .data/router.json(路由器流量历史/终端/活跃)
 # arp 扫描(scan_lan.py)依赖宿主网卡, 不在容器里做 —— 宿主的 make scan 负责
 if [ "${REFRESH}" = "1" ]; then
+  # 只取 ROUTER_* 三项: source 整个 .env 会把 PEER_ROOT 之类也导进来,
+  # 扩大暴露面而没收益。
+  if [ -f .env ]; then
+    ROUTER_HOST="${ROUTER_HOST:-$(sed -n 's/^ROUTER_HOST=//p' .env | head -1)}"
+    ROUTER_USER="${ROUTER_USER:-$(sed -n 's/^ROUTER_USER=//p' .env | head -1)}"
+    ROUTER_PASS="${ROUTER_PASS:-$(sed -n 's/^ROUTER_PASS=//p' .env | head -1)}"
+    export ROUTER_HOST ROUTER_USER ROUTER_PASS
+  fi
   (
-    echo "refresh loop: 每 ${REFRESH_SECS:-60}s 跑 router_fetch.py(容器内, 打路由器)"
+    echo "refresh loop: 每 ${REFRESH_SECS:-60}s 跑 router_fetch.run.lume(容器内, 打路由器)"
     while true; do
-      python3 scripts/router_fetch.py >/dev/null 2>&1 || true
+      # 凭据经环境变量传入: lume 脚本模式下不自动读 .env(只有 run() 会),
+      # 而 ROUTER_USER/PASS 存在 .env 里。export 出去由脚本的 env() 读取。
+      lume scripts/router_fetch.run.lume >/dev/null 2>&1 || true
       sleep "${REFRESH_SECS:-60}"
     done
   ) &

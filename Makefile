@@ -26,7 +26,11 @@
 #   esbuild 走 PATH,兜底 ../lume/frontend/node_modules(过渡用)
 #   宿主扫描脚本用 /usr/bin/python3 + 系统 arp(无第三方依赖)
 
-LUME      ?= $(HOME)/.local/bin/lume
+# 优先用同仓库编译出来的 lume(../lume/bin/lume), 其次 ~/.local/bin。
+# 为什么: router_fetch.run.lume 依赖 http_* 返回 headers 才能维持会话,
+# 而 ~/.local/bin/lume 可能是没这个能力的旧版(实测 0.8.1)。用旧版不会
+# 报错, 只会"登录成功但拿不到终端"——症状完全指不到版本。
+LUME      ?= $(if $(wildcard ../lume/bin/lume),../lume/bin/lume,$(HOME)/.local/bin/lume)
 PORT      ?= 8091
 # docker 容器在宿主的发布端口(>10000, 避开本地 make dev 的 8091); 容器内 Lume 仍绑 8091。
 DOCKER_PORT ?= 10091
@@ -35,7 +39,7 @@ DOCKER_PORT ?= 10091
 ADGUARD_PORT ?= 10095
 # 镜像名 / Lume 版本(与 Dockerfile 的 ARG 一致)。
 DOCKER_IMAGE ?= lume-lan
-LUME_VERSION ?= v0.11.0
+LUME_VERSION ?= v0.12.1
 LUME_REPO    ?= erishen/lume
 # 路由器地址(容器目标注入容器用)。**不写死网段**: 空 = 让脚本自己从
 # .data/devices.json 的 gateway 推导(宿主 arp 扫出来的真实网关);
@@ -73,7 +77,11 @@ scan-sweep:
 # 路由器后台抓取(家用路由器/HiLink):免密 deviceinfo 直接写 .data/router.json;
 # 终端/流量需 .env 填 ROUTER_PASS(与 ROUTER_TERMINAL_API,命中候选端点)。取不到不影响 arp 快照。
 router-fetch:
-	@$(PY) scripts/router_fetch.py
+	@# 用 lume 版: 宿主侧不必再依赖 python3 跑这一项(容器里已完全去掉)
+	@ROUTER_HOST="$${ROUTER_HOST:-$$(sed -n 's/^ROUTER_HOST=//p' .env | head -1)}" \
+	 ROUTER_USER="$${ROUTER_USER:-$$(sed -n 's/^ROUTER_USER=//p' .env | head -1)}" \
+	 ROUTER_PASS="$${ROUTER_PASS:-$$(sed -n 's/^ROUTER_PASS=//p' .env | head -1)}" \
+	 $(LUME) scripts/router_fetch.run.lume
 
 # 发一条测试消息到 webhook(验证 .env 的 WEBHOOK_URL/SECRET 配对了)。
 # 告警(新设备进网/WAN 跳变/异常流量)在 make router-fetch / dev 数据循环里自动评估,

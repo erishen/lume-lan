@@ -9,9 +9,23 @@
 #   docker buildx build --platform linux/arm64,linux/amd64 -t lume-lan .
 #   或本地单架构: docker build -t lume-lan . (自动按本机 arch 取对应二进制)
 
-ARG LUME_VERSION=v0.11.0
+ARG LUME_VERSION=v0.12.1
 ARG LUME_REPO=erishen/lume
-FROM python:3.12-slim AS base
+# ══ 为什么是 alpine 而不是 python:3.12-slim ═════════════════════════════
+# 之前用 python:3.12-slim, 镜像 168MB, 其中 101MB 是基础镜像本身。
+# 而这个镜像里 Python 的唯一用途是 entrypoint.sh 里那一行
+#   python3 scripts/router_fetch.py        (REFRESH=1 时的刷新循环)
+# 该脚本及其依赖(webhook_notify.py) **只用标准库**:
+#   base64 hashlib hmac json os re sys time urllib.*
+# 所以真正需要的是"一个能跑标准库的 python3", 不是 CPython 官方镜像
+# 那一整套(gcc/头文件/pip/setuptools/site-packages)。
+#
+# alpine 3.20 的 python3 包自带完整标准库, 实测两个脚本都能解析运行。
+# 实测体积: python:3.12-slim 168MB → alpine 59MB。
+#
+# 保留 curl: lume 的 /react/api/chat 用 execlp("curl") 调模型(TLS 交给
+# curl), 没有它这条链路直接失败(实测报 curl exit 7)。
+FROM alpine:3.20 AS base
 
 ARG TARGETARCH
 ARG LUME_VERSION
@@ -26,9 +40,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     # 留空 = 由 router_fetch.py 从 .data/devices.json 的 gateway 推导, 不写死网段。
     ROUTER_HOST=
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# ══ 为什么不再装 python3 ═══════════════════════════════════════════════
+# 之前装 python3 只为一个用途: REFRESH=1 时的刷新循环跑 router_fetch.py。
+# 实测 python3 占 44MB, 是整个镜像 76MB 的 58%。
+#
+# 现在那个循环跑的是 scripts/router_fetch.run.lume —— 同样的登录流程
+# (CSRF → SHA256 登录 → 带 cookie 取 HostInfo/topology/wan), 纯 lume。
+# 前提是 http_* 能读到响应头(Set-Cookie 才能维持会话), 见 builtins_http.c。
+#
+# 保留 curl: lume 的 /react/api/chat 用 execlp("curl") 调模型(TLS 交给
+# curl), 没有它这条链路直接失败(实测报 curl exit 7)。
+RUN apk add --no-cache curl ca-certificates tzdata
 
 # ---- 取 Lume 全静态 linux 二进制装到 /usr/local/bin/lume ----
 # 首选「宿主预下载」: make docker-fetch 在本机按 arch 把 static tarball 下到 vendor/
@@ -106,14 +128,42 @@ WORKDIR /app
 #   .data/*.json            → /app/.data (宿主 make scan/router-fetch 挂载进来)
 COPY lan.lume ./
 COPY src/ ./src/
-COPY scripts/ ./scripts/
+# 只带容器里真正会跑的脚本。
+# scripts/ 下还有 13 个 .py(scan_lan/adguard_fetch/dns_watch…), 它们要么
+# 依赖宿主网卡、要么是宿主的 make 目标 —— 容器里既没有 python3 也不会调用。
+# 整目录 COPY 会把它们(含 3.1MB __pycache__)一起装进镜像, 看起来像还能用,
+# 实际是死代码; 以后有人照着改, 会发现改了不生效。
+COPY scripts/router_fetch.lume ./scripts/
+COPY scripts/router_fetch.run.lume ./scripts/
 COPY www/ ./www/
 # lume-core/lib: peer / identity 等共享模块。lan.lume 与 peer_node.lume 都 import
 # "../lume-core/lib/peer.lume", 从 /app 看就是 /lume-core/lib/peer.lume —— 所以
 # 必须在镜像里放在**根目录**下, 且与宿主布局同名, 否则 import 解析失败。
 # (构建上下文里由 make docker-build 先把 ../lume-core/lib 同步到 .runtime/, 见
 #  下方 build 前的说明; 直接 COPY ../ 是不允许的。)
-COPY .runtime/lume-core/lib/ /lume-core/lib/
+# ── lume-core/lib: 按版本从 release 取 ─────────────────────────────────
+# 这 10 个 .lume 模块是源码(运行时 import 读盘), 不编进二进制。
+# 以前从宿主 ../lume-core/lib 复制进 .runtime/, 那份副本没有版本标记,
+# 会静默停在旧版 —— 症状是 "module 'peer' has no export '...'" 这种
+# 指向调用点、指不到旧文件的报错。改为 pin 版本从发布包取(v0.12.1 起带 lib/)。
+ARG LUME_CORE_VERSION=v0.12.1
+ARG LUME_CORE_REPO=erishen/lume-core
+RUN set -eux; \
+    case "${TARGETARCH:-arm64}" in \
+      amd64) carch=x64 ;; \
+      arm64) carch=arm64 ;; \
+      *) echo "unsupported TARGETARCH='${TARGETARCH}'" >&2; exit 1 ;; \
+    esac; \
+    base="https://github.com/${LUME_CORE_REPO}/releases/download/${LUME_CORE_VERSION}"; \
+    asset="lume-core-linux-${carch}"; \
+    curl -fsSL --retry 3 --retry-delay 2 -o /tmp/core.tar.gz "${base}/${asset}.tar.gz"; \
+    curl -fsSL --retry 3 -o /tmp/core.sha256 "${base}/${asset}.sha256"; \
+    (cd /tmp && sed "s|${asset}.tar.gz|core.tar.gz|" core.sha256 | sha256sum -c -); \
+    mkdir -p /tmp/core && tar -xzf /tmp/core.tar.gz -C /tmp/core; \
+    mkdir -p /lume-core; \
+    cp -r "/tmp/core/${asset}/lib" /lume-core/lib; \
+    test -f /lume-core/lib/peer.lume; \
+    rm -rf /tmp/core /tmp/core.tar.gz /tmp/core.sha256
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

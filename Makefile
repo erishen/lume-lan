@@ -39,7 +39,7 @@ DOCKER_PORT ?= 10091
 ADGUARD_PORT ?= 10095
 # 镜像名 / Lume 版本(与 Dockerfile 的 ARG 一致)。
 DOCKER_IMAGE ?= lume-lan
-LUME_VERSION ?= v0.12.1
+LUME_VERSION ?= v0.12.2
 LUME_REPO    ?= erishen/lume
 # 路由器地址(容器目标注入容器用)。**不写死网段**: 空 = 让脚本自己从
 # .data/devices.json 的 gateway 推导(宿主 arp 扫出来的真实网关);

@@ -9,7 +9,7 @@
 #   docker buildx build --platform linux/arm64,linux/amd64 -t lume-lan .
 #   或本地单架构: docker build -t lume-lan . (自动按本机 arch 取对应二进制)
 
-ARG LUME_VERSION=v0.12.1
+ARG LUME_VERSION=v0.12.2
 ARG LUME_REPO=erishen/lume
 # ══ 为什么是 alpine 而不是 python:3.12-slim ═════════════════════════════
 # 之前用 python:3.12-slim, 镜像 168MB, 其中 101MB 是基础镜像本身。
@@ -145,7 +145,7 @@ COPY www/ ./www/
 # 这 10 个 .lume 模块是源码(运行时 import 读盘), 不编进二进制。
 # 以前从宿主 ../lume-core/lib 复制进 .runtime/, 那份副本没有版本标记,
 # 会静默停在旧版 —— 症状是 "module 'peer' has no export '...'" 这种
-# 指向调用点、指不到旧文件的报错。改为 pin 版本从发布包取(v0.12.1 起带 lib/)。
+# 指向调用点、指不到旧文件的报错。改为 pin 版本从发布包取(v0.12.2 起带 lib/)。
 ARG LUME_CORE_VERSION=v0.12.1
 ARG LUME_CORE_REPO=erishen/lume-core
 RUN set -eux; \
